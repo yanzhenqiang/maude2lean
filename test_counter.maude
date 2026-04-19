@@ -1,0 +1,12 @@
+mod COUNTER is
+    sort Nat .
+    sort Counter .
+    op z : -> Nat .
+    op s : Nat -> Nat .
+    op mk : Nat -> Counter .
+    op tick : Counter -> Counter .
+    var N : Nat .
+    rl tick(mk(N)) => mk(s(N)) .
+endm
+
+rew tick(mk(z)) .

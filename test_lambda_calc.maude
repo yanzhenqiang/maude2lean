@@ -1,0 +1,16 @@
+fmod LAMBDA_CALC is
+    sort Expr .
+    sort Name .
+    op v_ : Nat -> Expr .
+    op l_ : Expr -> Expr .
+    op a__ : Expr Expr -> Expr .
+    op a : -> Name .
+    op b : -> Name .
+    op c : -> Name .
+
+    *** Beta reduction: a(l(X), Y) -> X with Y substituted
+    *** For simplicity, we use a specific example instead of general substitution
+    eq a(l(v(0)), v(1)) = v(1) .
+endfm
+
+red a(l(v(0)), v(1)) .

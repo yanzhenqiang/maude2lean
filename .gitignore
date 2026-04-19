@@ -1,0 +1,6 @@
+/target
+*.txt
+test_*.lean
+TestDebug*.lean
+debug.rs
+repl_cmds*.txt

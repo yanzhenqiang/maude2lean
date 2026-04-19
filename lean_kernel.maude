@@ -1,0 +1,143 @@
+*** Maude encoding of a minimal Lean 4 kernel ***
+*** Demonstrates beta reduction, let reduction, and recursor reduction ***
+
+fmod LeanExpr is
+    sort Expr .
+    sort Name .
+
+    *** Names
+    op Nat : -> Name .
+    op zero : -> Name .
+    op succ : -> Name .
+    op recNat : -> Name .
+    op recList : -> Name .
+
+    *** Expressions
+    op bvar : Nat -> Expr .
+    op const : Name -> Expr .
+    op app : Expr Expr -> Expr .
+    op lam : Expr Expr -> Expr .
+    op letE : Expr Expr Expr -> Expr .
+
+    *** Natural number constructors
+    op zeroE : -> Expr .
+    op succE : Expr -> Expr .
+    op nilE : -> Expr .
+    op consE : Expr Expr -> Expr .
+endfm
+
+***
+*** Substitution for de Bruijn indices
+***
+fmod LeanSubst is
+    protecting LeanExpr .
+    protecting NAT .
+
+    vars E E1 E2 F A T B V X : Expr .
+    vars N : Nat .
+    vars C : Name .
+
+    op subst : Expr Expr -> Expr .
+    op lift : Expr -> Expr .
+
+    eq subst(bvar(0), X) = X .
+    eq subst(bvar(s N), X) = bvar(N) .
+    eq subst(const(C), X) = const(C) .
+    eq subst(zeroE, X) = zeroE .
+    eq subst(succE(E), X) = succE(subst(E, X)) .
+    eq subst(app(F, A), X) = app(subst(F, X), subst(A, X)) .
+    eq subst(lam(T, B), X) = lam(subst(T, X), subst(B, lift(X))) .
+    eq subst(letE(T, V, B), X) = letE(subst(T, X), subst(V, X), subst(B, lift(X))) .
+
+    eq lift(bvar(N)) = bvar(s N) .
+    eq lift(const(C)) = const(C) .
+    eq lift(zeroE) = zeroE .
+    eq lift(succE(E)) = succE(lift(E)) .
+    eq lift(app(F, A)) = app(lift(F), lift(A)) .
+    eq lift(lam(T, B)) = lam(lift(T), lift(B)) .
+    eq lift(letE(T, V, B)) = letE(lift(T), lift(V), lift(B)) .
+endfm
+
+***
+*** Reduction rules (beta, zeta, iota)
+***
+fmod LeanReduce is
+    protecting LeanSubst .
+
+    vars T B A V P Z S N X L : Expr .
+    vars C : Name .
+
+    *** Beta reduction
+    eq app(lam(T, B), A) = subst(B, A) .
+
+    *** Let reduction (zeta)
+    eq letE(T, V, B) = subst(B, V) .
+
+    *** Nat recursor: recNat P z s zero -> z
+    eq app(app(app(app(const(recNat), P), Z), S), zeroE) = Z .
+
+    *** Nat recursor: recNat P z s (succ n) -> s n (recNat P z s n)
+    eq app(app(app(app(const(recNat), P), Z), S), succE(N))
+        = app(app(S, N), app(app(app(app(const(recNat), P), Z), S), N)) .
+
+    *** List recursor: recList A P n c nil -> n
+    eq app(app(app(app(app(const(recList), A), P), N), C), nilE) = N .
+
+    *** List recursor: recList A P n c (cons x l) -> c x l (recList A P n c l)
+    eq app(app(app(app(app(const(recList), A), P), N), C), consE(X, L))
+        = app(app(app(C, X), L), app(app(app(app(app(const(recList), A), P), N), C), L)) .
+endfm
+
+***
+*** Tests
+***
+
+*** Test 0: Simple substitution
+red subst(bvar(0), const(Nat)) .
+red subst(app(bvar(0), zeroE), const(Nat)) .
+
+*** Test 1: Beta reduction
+*** (lambda x. x) Nat  ~>  Nat
+red app(lam(const(Nat), bvar(0)), const(Nat)) .
+
+*** Test 2: Let reduction
+*** let x := Nat in x  ~>  Nat
+red letE(const(Nat), const(Nat), bvar(0)) .
+
+*** Test 3: Nested beta
+*** (lambda f. f zero) (lambda x. x)  ~>  zero
+red app(lam(app(const(Nat), const(Nat)), app(bvar(0), zeroE)), lam(const(Nat), bvar(0))) .
+
+*** Test 4: Nat recursor on zero
+*** recNat (lambda _. Nat) zero (lambda n ih. succ ih) zero  ~>  zero
+red app(app(app(app(const(recNat),
+    lam(const(Nat), const(Nat))),
+    const(zero)),
+    lam(const(Nat), lam(const(Nat), succE(bvar(0))))),
+    zeroE) .
+
+*** Test 5: Nat recursor on succ zero
+*** recNat (lambda _. Nat) zero (lambda n ih. succ ih) (succ zero)  ~>  succ zero
+red app(app(app(app(const(recNat),
+    lam(const(Nat), const(Nat))),
+    const(zero)),
+    lam(const(Nat), lam(const(Nat), succE(bvar(0))))),
+    succE(zeroE)) .
+
+*** Test 6: List recursor on nil
+*** recList Nat (lambda _. Nat) zero (lambda a l ih. succ ih) nil  ~>  zero
+red app(app(app(app(app(const(recList),
+    const(Nat)),
+    lam(const(Nat), const(Nat))),
+    const(zero)),
+    lam(const(Nat), lam(const(Nat), lam(const(Nat), succE(bvar(0)))))),
+    nilE) .
+
+*** Test 7: List recursor on cons zero nil
+*** recList Nat (lambda _. Nat) zero (lambda a l ih. succ ih) (cons zero nil)  ~>  succ zero
+red app(app(app(app(app(const(recList),
+    const(Nat)),
+    lam(const(Nat), const(Nat))),
+    const(zero)),
+    lam(const(Nat), lam(const(Nat), lam(const(Nat), succE(bvar(0)))))),
+    consE(const(zero), nilE)) .

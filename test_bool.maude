@@ -1,0 +1,12 @@
+fmod BOOL_TEST is
+    sort Bool .
+    op true : -> Bool .
+    op false : -> Bool .
+    op not : Bool -> Bool .
+    op and : Bool Bool -> Bool .
+    vars X Y : Bool .
+    eq not(true) = false .
+    eq not(false) = true .
+    eq and(true, X) = X .
+    eq and(false, X) = false .
+endfm

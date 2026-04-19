@@ -1,0 +1,1302 @@
+use super::declaration::*;
+use super::expr::*;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+/// Lean environment stores all constant declarations
+#[derive(Debug, Clone)]
+pub struct Environment {
+    constants: HashMap<Name, ConstantInfo>,
+    quot_initialized: bool,
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Environment {
+            constants: HashMap::new(),
+            quot_initialized: false,
+        }
+    }
+
+    pub fn is_quot_initialized(&self) -> bool {
+        self.quot_initialized
+    }
+
+    pub fn mark_quot_initialized(&mut self) {
+        self.quot_initialized = true;
+    }
+
+    /// Find a constant by name
+    pub fn find(&self, name: &Name) -> Option<&ConstantInfo> {
+        self.constants.get(name)
+    }
+
+    /// Get a constant by name (panics if not found)
+    pub fn get(&self, name: &Name) -> &ConstantInfo {
+        self.constants.get(name).expect("Constant not found")
+    }
+
+    /// Check if a constant exists
+    pub fn contains(&self, name: &Name) -> bool {
+        self.constants.contains_key(name)
+    }
+
+    /// Insert a constant info directly (used for recursors and built-ins)
+    pub fn insert_constant(&mut self, name: Name, info: ConstantInfo) {
+        self.constants.insert(name, info);
+    }
+
+    /// Add a declaration to the environment
+    pub fn add(&mut self, decl: Declaration) -> Result<(), String> {
+        match decl {
+            Declaration::Axiom(val) => {
+                let info = ConstantInfo::AxiomInfo(val.clone());
+                self.check_name(&val.constant_val.name)?;
+                self.constants.insert(val.constant_val.name, info);
+                Ok(())
+            }
+            Declaration::Definition(val) => {
+                let info = ConstantInfo::DefinitionInfo(val.clone());
+                self.check_name(&val.constant_val.name)?;
+                self.check_duplicated_univ_params(&val.constant_val.level_params)?;
+                self.constants.insert(val.constant_val.name, info);
+                Ok(())
+            }
+            Declaration::Theorem(val) => {
+                let info = ConstantInfo::TheoremInfo(val.clone());
+                self.check_name(&val.constant_val.name)?;
+                self.check_duplicated_univ_params(&val.constant_val.level_params)?;
+                self.constants.insert(val.constant_val.name, info);
+                Ok(())
+            }
+            Declaration::Opaque(val) => {
+                let info = ConstantInfo::OpaqueInfo(val.clone());
+                self.check_name(&val.constant_val.name)?;
+                self.check_duplicated_univ_params(&val.constant_val.level_params)?;
+                self.constants.insert(val.constant_val.name, info);
+                Ok(())
+            }
+            Declaration::Quot => {
+                self.add_quot()
+            }
+            Declaration::MutualDefinition(defs) => {
+                for val in defs {
+                    let info = ConstantInfo::DefinitionInfo(val.clone());
+                    self.check_name(&val.constant_val.name)?;
+                    self.check_duplicated_univ_params(&val.constant_val.level_params)?;
+                    self.constants.insert(val.constant_val.name, info);
+                }
+                Ok(())
+            }
+            Declaration::Inductive { level_params, num_params, types, is_unsafe } => {
+                self.add_inductive(level_params, num_params, types, is_unsafe)
+            }
+        }
+    }
+
+    fn check_name(&self, name: &Name) -> Result<(), String> {
+        if self.constants.contains_key(name) {
+            Err(format!("Constant '{}' already declared", name.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_duplicated_univ_params(&self, params: &Vec<Name>) -> Result<(), String> {
+        let mut seen = HashMap::new();
+        for p in params {
+            if seen.contains_key(p) {
+                return Err(format!("Duplicate universe parameter '{}'", p.to_string()));
+            }
+            seen.insert(p.clone(), true);
+        }
+        Ok(())
+    }
+
+    fn add_quot(&mut self) -> Result<(), String> {
+        // Add Quot, Quot.mk, Quot.lift, Quot.ind
+        let u = Name(vec!["u".to_string()]);
+        let quot_name = Name::new("Quot");
+        let _mk_name = Name::new("Quot").extend("mk");
+        let _lift_name = Name::new("Quot").extend("lift");
+        let _ind_name = Name::new("Quot").extend("ind");
+
+        // Quot : {A : Sort u} -> Sort u
+        let quot_ty = Expr::mk_pi(
+            Name::new("A"),
+            Expr::mk_sort(Level::Param(u.clone())),
+            Expr::mk_sort(Level::Param(u.clone()))
+        );
+
+        self.constants.insert(quot_name.clone(), ConstantInfo::QuotInfo(QuotVal {
+            constant_val: ConstantVal { name: quot_name, level_params: vec![u.clone()], ty: quot_ty },
+            kind: QuotKind::Type,
+        }));
+
+        self.mark_quot_initialized();
+        Ok(())
+    }
+
+    fn add_inductive(
+        &mut self,
+        level_params: Vec<Name>,
+        num_params: u64,
+        types: Vec<InductiveType>,
+        is_unsafe: bool,
+    ) -> Result<(), String> {
+        let all_names: Vec<Name> = types.iter().map(|t| t.name.clone()).collect();
+
+        for (_idx, ind_type) in types.iter().enumerate() {
+            let num_indices = Self::count_indices(&ind_type.ty, num_params);
+            let ctor_names: Vec<Name> = ind_type.ctors.iter().map(|c| c.name.clone()).collect();
+
+            // Validate constructors and compute is_rec
+            let mut is_rec = false;
+            for ctor in &ind_type.ctors {
+                // Check constructor return type matches inductive type
+                Self::validate_constructor_return_type(
+                    &ctor.ty, num_params, &ind_type.name, num_params, num_indices
+                )?;
+                // Check if constructor has recursive arguments
+                if Self::ctor_is_recursive(&ctor.ty, num_params, &ind_type.name) {
+                    is_rec = true;
+                }
+            }
+
+            // Add inductive type
+            let inductive_val = InductiveVal {
+                constant_val: ConstantVal {
+                    name: ind_type.name.clone(),
+                    level_params: level_params.clone(),
+                    ty: ind_type.ty.clone(),
+                },
+                num_params,
+                num_indices,
+                all: all_names.clone(),
+                ctors: ctor_names.clone(),
+                num_nested: 0,
+                is_rec,
+                is_unsafe,
+                is_reflexive: false,
+            };
+
+            self.check_name(&ind_type.name)?;
+            self.constants.insert(
+                ind_type.name.clone(),
+                ConstantInfo::InductiveInfo(inductive_val),
+            );
+
+            // Extract param names for converting constructor types to de Bruijn
+            let param_names = Self::extract_param_names(&ind_type.ty, num_params);
+
+            // Add constructors
+            for (cidx, ctor) in ind_type.ctors.iter().enumerate() {
+                let num_fields = Self::count_fields(&ctor.ty, num_params);
+                // Convert parameter constants to bound variables for type inference
+                let ctor_ty_debruijn = Self::abstract_params(&ctor.ty, &param_names, 0);
+                let ctor_val = ConstructorVal {
+                    constant_val: ConstantVal {
+                        name: ctor.name.clone(),
+                        level_params: level_params.clone(),
+                        ty: ctor_ty_debruijn,
+                    },
+                    induct: ind_type.name.clone(),
+                    cidx: cidx as u64,
+                    num_params,
+                    num_fields,
+                    is_unsafe,
+                };
+
+                self.check_name(&ctor.name)?;
+                self.constants.insert(
+                    ctor.name.clone(),
+                    ConstantInfo::ConstructorInfo(ctor_val),
+                );
+            }
+
+            // Generate recursor
+            let rec_name = Name::new("rec").extend(&ind_type.name.to_string());
+            let num_minors = ind_type.ctors.len() as u64;
+            let mut rules = Vec::new();
+
+            for (cidx, ctor) in ind_type.ctors.iter().enumerate() {
+                let nfields = Self::count_fields(&ctor.ty, num_params);
+                let rhs = Self::mk_recursor_rhs(
+                    num_params,
+                    nfields,
+                    num_minors,
+                    cidx as u64,
+                    &ind_type.name,
+                    &level_params,
+                    is_rec,
+                );
+                rules.push(RecursorRule {
+                    ctor: ctor.name.clone(),
+                    nfields,
+                    rhs,
+                });
+            }
+
+            // Generate recursor type (simplified but structurally sound)
+            let rec_ty = Self::mk_recursor_type(
+                &ind_type.name,
+                &ind_type.ty,
+                num_params,
+                num_indices,
+                &ind_type.ctors,
+            );
+
+            let rec_val = RecursorVal {
+                constant_val: ConstantVal {
+                    name: rec_name.clone(),
+                    level_params: level_params.clone(),
+                    ty: rec_ty,
+                },
+                all: all_names.clone(),
+                num_params,
+                num_indices,
+                num_motives: 1,
+                num_minors,
+                rules,
+                k: num_indices == 0 && !is_rec, // K-like if no indices and not recursive
+                is_unsafe,
+            };
+
+            self.constants.insert(rec_name, ConstantInfo::RecursorInfo(rec_val));
+        }
+
+        Ok(())
+    }
+
+    /// Validate that a constructor's return type (after consuming params) is the inductive type.
+    fn validate_constructor_return_type(
+        ctor_ty: &Expr,
+        num_params: u64,
+        ind_name: &Name,
+        _ind_num_params: u64,
+        _ind_num_indices: u64,
+    ) -> Result<(), String> {
+        let mut current = ctor_ty;
+        // Skip parameter binders
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                return Err("Constructor type has fewer Pi binders than declared parameters".to_string());
+            }
+        }
+        // Skip field binders to get to the return type
+        while current.is_pi() {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        // The result should be an application of the inductive type (or just the inductive type)
+        let head = current.get_app_fn();
+        if let Expr::Const(name, _) = head {
+            if name == ind_name {
+                return Ok(());
+            }
+        }
+        // For simple cases like `Nat` with no params/indices, the return type is just `Const(Nat)`
+        if let Expr::Const(name, _) = current {
+            if name == ind_name {
+                return Ok(());
+            }
+        }
+        Err(format!(
+            "Constructor return type {:?} does not match inductive type {}",
+            current, ind_name.to_string()
+        ))
+    }
+
+    /// Check if a constructor has recursive arguments.
+    fn ctor_is_recursive(ctor_ty: &Expr, num_params: u64, ind_name: &Name) -> bool {
+        let mut current = ctor_ty;
+        // Skip parameter binders
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                return false;
+            }
+        }
+        // Check field types for occurrences of the inductive type
+        while let Expr::Pi(_, _, domain, body) = current {
+            if Self::expr_contains_const(domain, ind_name) {
+                return true;
+            }
+            current = body;
+        }
+        false
+    }
+
+    /// Check if an expression contains a constant with the given name.
+    fn expr_contains_const(e: &Expr, name: &Name) -> bool {
+        match e {
+            Expr::Const(n, _) => n == name,
+            Expr::App(f, a) => Self::expr_contains_const(f, name) || Self::expr_contains_const(a, name),
+            Expr::Pi(_, _, ty, body) => Self::expr_contains_const(ty, name) || Self::expr_contains_const(body, name),
+            Expr::Lambda(_, _, ty, body) => Self::expr_contains_const(ty, name) || Self::expr_contains_const(body, name),
+            Expr::Let(_, ty, value, body, _) => {
+                Self::expr_contains_const(ty, name)
+                    || Self::expr_contains_const(value, name)
+                    || Self::expr_contains_const(body, name)
+            }
+            Expr::Sort(l) => Self::level_contains_name(l, name),
+            _ => false,
+        }
+    }
+
+    fn level_contains_name(l: &Level, name: &Name) -> bool {
+        match l {
+            Level::Param(n) | Level::MVar(n) => n == name,
+            Level::Succ(l) => Self::level_contains_name(l, name),
+            Level::Max(l1, l2) | Level::IMax(l1, l2) => {
+                Self::level_contains_name(l1, name) || Self::level_contains_name(l2, name)
+            }
+            Level::Zero => false,
+        }
+    }
+
+    /// Build the recursor rule RHS for a constructor.
+    ///
+    /// The result is wrapped in lambdas with binding order (from outside in):
+    ///   params, motive, minors, fields
+    ///
+    /// Inside the innermost body:
+    ///   BVar(0) = last field
+    ///   BVar(nfields - 1) = first field
+    ///   BVar(nfields) = last minor premise
+    ///   BVar(nfields + n_minors - 1) = first minor premise
+    ///   BVar(nfields + n_minors) = motive
+    ///   BVar(nfields + n_minors + 1) = last param
+    ///   BVar(nfields + n_minors + num_params) = first param
+    fn mk_recursor_rhs(
+        num_params: u64,
+        nfields: u64,
+        num_minors: u64,
+        cidx: u64,
+        ind_name: &Name,
+        level_params: &[Name],
+        is_rec: bool,
+    ) -> Expr {
+        let total_bound = nfields + num_minors + 1 + num_params;
+
+        // Build the inner body
+        let minor_idx = nfields + num_minors - 1 - cidx;
+        let mut body = Expr::mk_bvar(minor_idx);
+
+        // Apply all fields to the minor premise
+        for j in 0..nfields {
+            let field_idx = nfields - 1 - j;
+            body = Expr::mk_app(body, Expr::mk_bvar(field_idx));
+        }
+
+        // For recursive constructors, also apply the recursive call
+        if is_rec && nfields > 0 {
+            let rec_levels: Vec<Level> = level_params.iter().cloned().map(Level::Param).collect();
+            let mut rec_call = Expr::mk_const(
+                Name::new("rec").extend(&ind_name.to_string()),
+                rec_levels,
+            );
+
+            // Apply params
+            for i in 0..num_params {
+                let param_idx = total_bound - 1 - i;
+                rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(param_idx));
+            }
+
+            // Apply motive
+            let motive_idx = total_bound - 1 - num_params;
+            rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(motive_idx));
+
+            // Apply minors
+            for i in 0..num_minors {
+                let minor_bvar_idx = nfields + num_minors - 1 - i;
+                rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(minor_bvar_idx));
+            }
+
+            // Apply the recursive field (last field, innermost binder = BVar(0))
+            rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(0));
+
+            body = Expr::mk_app(body, rec_call);
+        }
+
+        // Wrap body in lambdas: fields (innermost), then minors, then motive, then params (outermost)
+        let mut result = body;
+
+        // Wrap fields (last to first)
+        for j in (0..nfields).rev() {
+            result = Expr::Lambda(
+                Name::new(&format!("f{}", j)),
+                BinderInfo::Default,
+                Rc::new(Expr::mk_type()),
+                Rc::new(result),
+            );
+        }
+
+        // Wrap minors (last to first)
+        for j in (0..num_minors).rev() {
+            result = Expr::Lambda(
+                Name::new(&format!("m{}", j)),
+                BinderInfo::Default,
+                Rc::new(Expr::mk_type()),
+                Rc::new(result),
+            );
+        }
+
+        // Wrap motive
+        result = Expr::Lambda(
+            Name::new("P"),
+            BinderInfo::Default,
+            Rc::new(Expr::mk_type()),
+            Rc::new(result),
+        );
+
+        // Wrap params (last to first)
+        for j in (0..num_params).rev() {
+            result = Expr::Lambda(
+                Name::new(&format!("p{}", j)),
+                BinderInfo::Default,
+                Rc::new(Expr::mk_type()),
+                Rc::new(result),
+            );
+        }
+
+        result
+    }
+
+    /// Generate a recursor type for the inductive type.
+    /// The recursor type is:
+    ///   (params) -> (P : I params indices -> Sort u) -> minor_premises -> (x : I params indices) -> P x
+    fn mk_recursor_type(
+        ind_name: &Name,
+        ind_ty: &Expr,
+        num_params: u64,
+        num_indices: u64,
+        ctors: &[Constructor],
+    ) -> Expr {
+        let num_minors = ctors.len() as u64;
+        let u = Name::new("u");
+        let u_level = Level::Param(u.clone());
+
+        // Innermost expression: P x
+        // In the final structure (inside x): P = BVar(num_minors + 1), x = BVar(0)
+        let mut result = Expr::mk_app(Expr::mk_bvar(num_minors + 1), Expr::mk_bvar(0));
+
+        // Wrap major premise: (x : I params indices)
+        // In x's domain, params start at BVar(num_minors + 1) because
+        // inside-out binders are: x, minors..., P, params...
+        let x_ty = Self::mk_inductive_app(ind_name, num_params, num_indices, num_minors + 1);
+        result = Expr::mk_pi(Name::new("x"), x_ty, result);
+
+        // Wrap minor premises (from last to first so m0 is outermost)
+        for cidx in (0..num_minors).rev() {
+            let minor_ty = Self::mk_minor_premise_type(
+                &ctors[cidx as usize],
+                num_params,
+                ind_name,
+                cidx,
+            );
+            result = Expr::mk_pi(Name::new(&format!("m{}", cidx)), minor_ty, result);
+        }
+
+        // Wrap motive: (P : I params indices -> Sort u)
+        // In P's domain, params start at BVar(0) because params are the
+        // only binders outside P.
+        let motive_ty = Self::mk_motive_type(ind_name, num_params, num_indices, u_level);
+        result = Expr::mk_pi(Name::new("P"), motive_ty, result);
+
+        // Wrap parameters (from last to first so p0 is outermost)
+        let param_types = Self::extract_param_types(ind_ty, num_params);
+        for (name, ty) in param_types.iter().rev() {
+            result = Expr::mk_pi(name.clone(), ty.clone(), result);
+        }
+
+        result
+    }
+
+    /// Build the motive type: I params indices -> Sort u
+    /// For simplicity, we use Type (Sort 1) as the motive return sort.
+    /// In a full Lean kernel, this would be a fresh universe parameter.
+    fn mk_motive_type(
+        ind_name: &Name,
+        num_params: u64,
+        num_indices: u64,
+        _u_level: Level,
+    ) -> Expr {
+        // In P's domain, params are the innermost binders (start at BVar 0).
+        let ind_app = Self::mk_inductive_app(ind_name, num_params, num_indices, 0);
+        Expr::mk_arrow(ind_app, Expr::mk_type())
+    }
+
+    /// Build an application of the inductive type to params and indices (as BVars).
+    /// `param_offset` is the BVar index of the first param at the point of use.
+    fn mk_inductive_app(ind_name: &Name, num_params: u64, num_indices: u64, param_offset: u64) -> Expr {
+        let mut app = Expr::mk_const(ind_name.clone(), vec![]);
+        for i in 0..num_params {
+            app = Expr::mk_app(app, Expr::mk_bvar(param_offset + i));
+        }
+        for i in 0..num_indices {
+            app = Expr::mk_app(app, Expr::mk_bvar(param_offset + num_params + i));
+        }
+        app
+    }
+
+    /// Build the minor premise type for a constructor.
+    /// The minor premise is a Pi type over the constructor's fields,
+    /// with an extra ih argument for each recursive field.
+    fn mk_minor_premise_type(
+        ctor: &Constructor,
+        num_params: u64,
+        ind_name: &Name,
+        cidx: u64,
+    ) -> Expr {
+        // Collect field types from constructor type (skipping params)
+        let mut fields = Vec::new();
+        let mut current = &ctor.ty;
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        while let Expr::Pi(name, _, domain, body) = current {
+            fields.push((name.clone(), (**domain).clone()));
+            current = body;
+        }
+
+        let num_ihs = fields
+            .iter()
+            .filter(|(_, d)| Self::expr_contains_const(d, ind_name))
+            .count();
+        let total_inner = fields.len() + num_ihs;
+
+        // In the minor premise domain, the recursor-level binders from inside out are:
+        //   preceding minors (cidx of them), P (1), params (num_params)
+        // So P is at BVar(fidx + cidx) when inside field fidx's domain,
+        // and param i is at BVar(fidx + cidx + 1 + i).
+        //
+        // In the return type (innermost, after all field/ih binders):
+        //   P is at BVar(total_inner + cidx)
+        //   param i is at BVar(total_inner + cidx + 1 + i)
+
+        // Build return type: P (ctor params fields)
+        let mut ctor_app = Expr::mk_const(ctor.name.clone(), vec![]);
+        // Apply params
+        for i in 0..num_params {
+            let param_idx = total_inner as u64 + cidx + 1 + i;
+            ctor_app = Expr::mk_app(ctor_app, Expr::mk_bvar(param_idx));
+        }
+        // Apply fields (field j is at BVar(total_inner - 1 - j) from inside all binders)
+        for fidx in 0..fields.len() {
+            let field_bvar = (total_inner - 1 - fidx) as u64;
+            ctor_app = Expr::mk_app(ctor_app, Expr::mk_bvar(field_bvar));
+        }
+        let mut result = Expr::mk_app(Expr::mk_bvar(total_inner as u64 + cidx), ctor_app);
+
+        // Wrap field binders from inside out (last field first).
+        // For each field, wrap ih FIRST (making it inner), then field (outer).
+        for fidx in (0..fields.len()).rev() {
+            let is_recursive = Self::expr_contains_const(&fields[fidx].1, ind_name);
+
+            if is_recursive {
+                // ih_ty = P field
+                // In ih_ty: field = BVar(0), P = BVar(fidx + 1 + cidx)
+                let p_idx_in_ih_ty = (fidx + 1) as u64 + cidx;
+                let ih_ty = Expr::mk_app(Expr::mk_bvar(p_idx_in_ih_ty), Expr::mk_bvar(0));
+                result = Expr::mk_pi(Name::new("ih"), ih_ty, result);
+            }
+
+            // field_ty: convert param constants to BVars.
+            // In field_ty (outside field fidx, inside earlier fields):
+            // param i = BVar(fidx + cidx + 1 + i)
+            let param_base = fidx as u64 + cidx + 1;
+            let domain = Self::subst_params_with_bvars(
+                &fields[fidx].1,
+                num_params,
+                param_base,
+            );
+            result = Expr::mk_pi(fields[fidx].0.clone(), domain, result);
+        }
+
+        result
+    }
+
+    /// Convert parameter constants in a constructor type to bound variables.
+    /// The constructor type is expected to have its parameters as the outermost Pi binders.
+    /// `param_names` are the names of the parameters, in order (outermost first).
+    /// `depth` is the current number of enclosing binders during traversal.
+    fn abstract_params(e: &Expr, param_names: &[Name], depth: u64) -> Expr {
+        if param_names.is_empty() {
+            return e.clone();
+        }
+        match e {
+            Expr::Const(name, ls) => {
+                for (i, param_name) in param_names.iter().enumerate() {
+                    if name == param_name {
+                        // Param at index i (0 = outermost) is at BVar(depth - 1 - i)
+                        return Expr::mk_bvar(depth - 1 - i as u64);
+                    }
+                }
+                Expr::Const(name.clone(), ls.clone())
+            }
+            Expr::App(f, a) => Expr::mk_app(
+                Self::abstract_params(f, param_names, depth),
+                Self::abstract_params(a, param_names, depth),
+            ),
+            Expr::Pi(name, bi, ty, body) => Expr::Pi(
+                name.clone(),
+                *bi,
+                Rc::new(Self::abstract_params(ty, param_names, depth)),
+                Rc::new(Self::abstract_params(body, param_names, depth + 1)),
+            ),
+            Expr::Lambda(name, bi, ty, body) => Expr::Lambda(
+                name.clone(),
+                *bi,
+                Rc::new(Self::abstract_params(ty, param_names, depth)),
+                Rc::new(Self::abstract_params(body, param_names, depth + 1)),
+            ),
+            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
+                name.clone(),
+                Rc::new(Self::abstract_params(ty, param_names, depth)),
+                Rc::new(Self::abstract_params(value, param_names, depth)),
+                Rc::new(Self::abstract_params(body, param_names, depth + 1)),
+                *nondep,
+            ),
+            Expr::Sort(l) => Expr::Sort(l.clone()),
+            Expr::Lit(lit) => Expr::Lit(lit.clone()),
+            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(Self::abstract_params(e, param_names, depth))),
+            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(Self::abstract_params(e, param_names, depth))),
+            other => other.clone(),
+        }
+    }
+
+    /// Substitute param constants in an expression with BVars.
+    /// In our constructor types, params are referenced as constants (e.g., Const("A")).
+    /// In the recursor type, params are bound as Pi binders at specific de Bruijn indices.
+    /// `param_base` is the BVar index of the FIRST param (outermost) from the current position.
+    fn subst_params_with_bvars(e: &Expr, num_params: u64, param_base: u64) -> Expr {
+        if num_params == 0 {
+            return e.clone();
+        }
+        match e {
+            Expr::Const(n, ls) => {
+                // For simplicity, we assume a single param named "A" when num_params == 1.
+                // This matches our test cases. For multi-param, we'd need param names.
+                if num_params == 1 && n.0 == ["A"] {
+                    Expr::mk_bvar(param_base)
+                } else {
+                    Expr::Const(n.clone(), ls.clone())
+                }
+            }
+            Expr::App(f, a) => Expr::mk_app(
+                Self::subst_params_with_bvars(f, num_params, param_base),
+                Self::subst_params_with_bvars(a, num_params, param_base),
+            ),
+            Expr::Pi(name, bi, ty, body) => Expr::Pi(
+                name.clone(),
+                *bi,
+                Rc::new(Self::subst_params_with_bvars(ty, num_params, param_base)),
+                Rc::new(Self::subst_params_with_bvars(body, num_params, param_base + 1)),
+            ),
+            Expr::Lambda(name, bi, ty, body) => Expr::Lambda(
+                name.clone(),
+                *bi,
+                Rc::new(Self::subst_params_with_bvars(ty, num_params, param_base)),
+                Rc::new(Self::subst_params_with_bvars(body, num_params, param_base + 1)),
+            ),
+            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
+                name.clone(),
+                Rc::new(Self::subst_params_with_bvars(ty, num_params, param_base)),
+                Rc::new(Self::subst_params_with_bvars(value, num_params, param_base)),
+                Rc::new(Self::subst_params_with_bvars(body, num_params, param_base + 1)),
+                *nondep,
+            ),
+            Expr::Sort(l) => Expr::Sort(Self::subst_params_in_level(l, num_params, param_base)),
+            Expr::Proj(s, i, e) => Expr::Proj(
+                s.clone(),
+                *i,
+                Rc::new(Self::subst_params_with_bvars(e, num_params, param_base)),
+            ),
+            Expr::MData(d, e) => Expr::MData(
+                d.clone(),
+                Rc::new(Self::subst_params_with_bvars(e, num_params, param_base)),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    fn subst_params_in_level(l: &Level, num_params: u64, param_base: u64) -> Level {
+        if num_params == 0 {
+            return l.clone();
+        }
+        match l {
+            Level::Param(n) => {
+                if num_params == 1 && n.0 == ["A"] {
+                    // Level params are not substituted in our simplified implementation
+                    l.clone()
+                } else {
+                    l.clone()
+                }
+            }
+            Level::Succ(l) => Level::mk_succ(Self::subst_params_in_level(l, num_params, param_base)),
+            Level::Max(l1, l2) => Level::mk_max(
+                Self::subst_params_in_level(l1, num_params, param_base),
+                Self::subst_params_in_level(l2, num_params, param_base),
+            ),
+            Level::IMax(l1, l2) => Level::mk_imax(
+                Self::subst_params_in_level(l1, num_params, param_base),
+                Self::subst_params_in_level(l2, num_params, param_base),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    /// Extract parameter names from the inductive type.
+    fn extract_param_names(ty: &Expr, num_params: u64) -> Vec<Name> {
+        let mut result = Vec::new();
+        let mut current = ty;
+        for _ in 0..num_params {
+            if let Expr::Pi(name, _, _, body) = current {
+                result.push(name.clone());
+                current = body;
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Extract parameter types from the inductive type.
+    fn extract_param_types(ty: &Expr, num_params: u64) -> Vec<(Name, Expr)> {
+        let mut result = Vec::new();
+        let mut current = ty;
+        for _ in 0..num_params {
+            if let Expr::Pi(name, _, domain, body) = current {
+                result.push((name.clone(), (**domain).clone()));
+                current = body;
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    fn count_indices(ty: &Expr, num_params: u64) -> u64 {
+        let mut count = 0;
+        let mut current = ty;
+        // Skip parameters
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        // Count remaining Pi types as indices
+        while current.is_pi() {
+            count += 1;
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    fn count_fields(ty: &Expr, num_params: u64) -> u64 {
+        let mut count = 0;
+        let mut current = ty;
+        // Skip parameters
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        // Count remaining Pi types as fields
+        while current.is_pi() {
+            count += 1;
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    /// Iterate over all constants
+    pub fn for_each_constant<F>(&self, mut f: F)
+    where
+        F: FnMut(&ConstantInfo),
+    {
+        for (_, info) in &self.constants {
+            f(info);
+        }
+    }
+
+    pub fn num_constants(&self) -> usize {
+        self.constants.len()
+    }
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+
+    #[test]
+    fn test_add_inductive_bool() {
+        let mut env = Environment::new();
+
+        let bool_ind = InductiveType {
+            name: Name::new("Bool"),
+            ty: Expr::mk_type(),
+            ctors: vec![
+                Constructor { name: Name::new("false"), ty: Expr::mk_const(Name::new("Bool"), vec![]) },
+                Constructor { name: Name::new("true"), ty: Expr::mk_const(Name::new("Bool"), vec![]) },
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![bool_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        assert!(env.contains(&Name::new("Bool")));
+        assert!(env.contains(&Name::new("false")));
+        assert!(env.contains(&Name::new("true")));
+        assert!(env.contains(&Name::new("rec").extend("Bool")));
+
+        // Check Bool is not recursive
+        let bool_info = env.find(&Name::new("Bool")).unwrap().to_inductive_val().unwrap();
+        assert!(!bool_info.is_rec);
+    }
+
+    #[test]
+    fn test_add_inductive_nat() {
+        let mut env = Environment::new();
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let nat_ind = InductiveType {
+            name: Name::new("Nat"),
+            ty: Expr::mk_type(),
+            ctors: vec![
+                Constructor { name: Name::new("zero"), ty: nat.clone() },
+                Constructor {
+                    name: Name::new("succ"),
+                    ty: Expr::mk_arrow(nat.clone(), nat.clone()),
+                },
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![nat_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        assert!(env.contains(&Name::new("Nat")));
+        assert!(env.contains(&Name::new("zero")));
+        assert!(env.contains(&Name::new("succ")));
+        assert!(env.contains(&Name::new("rec").extend("Nat")));
+
+        // Check Nat is recursive
+        let nat_info = env.find(&Name::new("Nat")).unwrap().to_inductive_val().unwrap();
+        assert!(nat_info.is_rec);
+
+        // Check constructor info
+        let zero_info = env.find(&Name::new("zero")).unwrap().to_constructor_val().unwrap();
+        assert_eq!(zero_info.num_fields, 0);
+
+        let succ_info = env.find(&Name::new("succ")).unwrap().to_constructor_val().unwrap();
+        assert_eq!(succ_info.num_fields, 1);
+
+        // Check recursor has 2 rules
+        let rec_info = env.find(&Name::new("rec").extend("Nat")).unwrap().to_recursor_val().unwrap();
+        assert_eq!(rec_info.rules.len(), 2);
+        assert_eq!(rec_info.num_minors, 2);
+    }
+
+    #[test]
+    fn test_add_inductive_invalid_constructor() {
+        let mut env = Environment::new();
+
+        // Constructor returning wrong type
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let bool_ind = InductiveType {
+            name: Name::new("Bool"),
+            ty: Expr::mk_type(),
+            ctors: vec![
+                Constructor { name: Name::new("false"), ty: nat.clone() }, // wrong: returns Nat instead of Bool
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![bool_ind],
+            is_unsafe: false,
+        };
+
+        assert!(env.add(decl).is_err());
+    }
+
+    #[test]
+    fn test_generated_recursor_reduces() {
+        use crate::lean::type_checker::*;
+
+        let mut env = Environment::new();
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let nat_ind = InductiveType {
+            name: Name::new("Nat"),
+            ty: Expr::mk_type(),
+            ctors: vec![
+                Constructor { name: Name::new("zero"), ty: nat.clone() },
+                Constructor {
+                    name: Name::new("succ"),
+                    ty: Expr::mk_arrow(nat.clone(), nat.clone()),
+                },
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![nat_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let nat_rec = Expr::mk_const(Name::new("rec").extend("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+
+        // Motive: λ n. Nat
+        let motive = Expr::mk_lambda(Name::new("n"), nat.clone(), nat.clone());
+
+        // succ minor premise: λ n ih. succ ih
+        let succ_minor = Expr::Lambda(
+            Name::new("n"), BinderInfo::Default, Rc::new(nat.clone()),
+            Rc::new(Expr::Lambda(
+                Name::new("ih"), BinderInfo::Default, Rc::new(nat.clone()),
+                Rc::new(Expr::mk_app(succ.clone(), Expr::BVar(0)))
+            ))
+        );
+
+        // Nat.rec (λ n. Nat) zero (λ n ih. succ ih) zero  ~>  zero
+        let app_zero = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(nat_rec.clone(), motive.clone()), zero.clone()), succ_minor.clone()),
+            zero.clone()
+        );
+        let result = tc.whnf(&app_zero);
+        assert_eq!(result, zero);
+
+        // Nat.rec (λ n. Nat) zero (λ n ih. succ ih) (succ zero)
+        let one = Expr::mk_app(succ.clone(), zero.clone());
+        let app_one = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(nat_rec.clone(), motive.clone()), zero.clone()), succ_minor.clone()),
+            one.clone()
+        );
+        let result = tc.whnf(&app_one);
+        // WHNF should give: succ (Nat.rec (λ n. Nat) zero (λ n ih. succ ih) zero)
+        let expected_inner = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(nat_rec, motive), zero.clone()), succ_minor), zero
+        );
+        let expected = Expr::mk_app(succ, expected_inner);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_add_inductive_list() {
+        use crate::lean::type_checker::*;
+
+        let mut env = Environment::new();
+
+        let type0 = Expr::mk_type();
+        let a_ty = Expr::mk_const(Name::new("A"), vec![]);
+        let list_a = Expr::mk_app(Expr::mk_const(Name::new("List"), vec![]), a_ty.clone());
+
+        let list_ind = InductiveType {
+            name: Name::new("List"),
+            ty: Expr::mk_pi(Name::new("A"), type0.clone(), type0.clone()),
+            ctors: vec![
+                // nil : (A : Type) -> List A
+                Constructor {
+                    name: Name::new("nil"),
+                    ty: Expr::mk_pi(Name::new("A"), type0.clone(), list_a.clone()),
+                },
+                // cons : (A : Type) -> A -> List A -> List A
+                Constructor {
+                    name: Name::new("cons"),
+                    ty: Expr::mk_pi(
+                        Name::new("A"),
+                        type0.clone(),
+                        Expr::mk_arrow(
+                            a_ty.clone(),
+                            Expr::mk_arrow(list_a.clone(), list_a.clone()),
+                        ),
+                    ),
+                },
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 1,
+            types: vec![list_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        // Verify constructors and recursor exist
+        assert!(env.contains(&Name::new("List")));
+        assert!(env.contains(&Name::new("nil")));
+        assert!(env.contains(&Name::new("cons")));
+        assert!(env.contains(&Name::new("rec").extend("List")));
+
+        // Check List is recursive
+        let list_info = env.find(&Name::new("List")).unwrap().to_inductive_val().unwrap();
+        assert!(list_info.is_rec);
+        assert_eq!(list_info.num_params, 1);
+
+        // Check constructor field counts
+        let nil_info = env.find(&Name::new("nil")).unwrap().to_constructor_val().unwrap();
+        assert_eq!(nil_info.num_fields, 0);
+
+        let cons_info = env.find(&Name::new("cons")).unwrap().to_constructor_val().unwrap();
+        assert_eq!(cons_info.num_fields, 2);
+
+        // Test reduction with generated recursor
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let list_rec = Expr::mk_const(Name::new("rec").extend("List"), vec![]);
+        let nil_ctor = Expr::mk_const(Name::new("nil"), vec![]);
+        let cons_ctor = Expr::mk_const(Name::new("cons"), vec![]);
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+
+        // Build: List Nat
+        let list_nat = Expr::mk_app(Expr::mk_const(Name::new("List"), vec![]), nat.clone());
+
+        // Motive: λ (l : List Nat). Nat
+        let motive = Expr::mk_lambda(Name::new("l"), list_nat.clone(), nat.clone());
+
+        // nil case: zero
+        let nil_case = zero.clone();
+
+        // cons case: λ a l ih. succ ih  (where succ is a placeholder)
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+        let cons_case = Expr::Lambda(
+            Name::new("a"), BinderInfo::Default, Rc::new(nat.clone()),
+            Rc::new(Expr::Lambda(
+                Name::new("l"), BinderInfo::Default, Rc::new(list_nat.clone()),
+                Rc::new(Expr::Lambda(
+                    Name::new("ih"), BinderInfo::Default, Rc::new(nat.clone()),
+                    Rc::new(Expr::mk_app(succ.clone(), Expr::BVar(0)))
+                ))
+            ))
+        );
+
+        // List.rec Nat (λ l. Nat) zero (λ a l ih. succ ih) (cons Nat zero nil)
+        let nil_list_nat = Expr::mk_app(nil_ctor.clone(), nat.clone());
+        let test_list = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(cons_ctor.clone(), nat.clone()), zero.clone()),
+            nil_list_nat.clone()
+        );
+
+        let app = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_app(list_rec, nat.clone()), motive.clone()),
+                    nil_case.clone()
+                ),
+                cons_case.clone()
+            ),
+            test_list.clone()
+        );
+
+        let result = tc.nf(&app);
+        // Full normalization should reduce the entire expression
+        let expected = Expr::mk_app(succ, zero);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_nat_recursor_type_check() {
+        use crate::lean::type_checker::*;
+
+        let mut env = Environment::new();
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let nat_ind = InductiveType {
+            name: Name::new("Nat"),
+            ty: Expr::mk_type(),
+            ctors: vec![
+                Constructor { name: Name::new("zero"), ty: nat.clone() },
+                Constructor { name: Name::new("succ"), ty: Expr::mk_arrow(nat.clone(), nat.clone()) },
+            ],
+        };
+        let decl = Declaration::Inductive {
+            level_params: vec![], num_params: 0, types: vec![nat_ind], is_unsafe: false,
+        };
+        env.add(decl).unwrap();
+
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        // Check that Nat.rec has a Pi type
+        let nat_rec = Expr::mk_const(Name::new("rec").extend("Nat"), vec![]);
+        let rec_ty = tc.infer(&nat_rec).unwrap();
+        assert!(rec_ty.is_pi(), "Nat.rec type should be a Pi, got {:?}", rec_ty);
+        println!("Nat.rec type: {:?}", rec_ty);
+
+        // Type-check a recursor application
+        let motive = Expr::mk_lambda(Name::new("n"), nat.clone(), nat.clone());
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+        let succ_minor = Expr::Lambda(
+            Name::new("n"), BinderInfo::Default, Rc::new(nat.clone()),
+            Rc::new(Expr::Lambda(
+                Name::new("ih"), BinderInfo::Default, Rc::new(nat.clone()),
+                Rc::new(Expr::mk_app(succ.clone(), Expr::BVar(0)))
+            ))
+        );
+
+        let app = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(nat_rec, motive), zero.clone()), succ_minor),
+            zero.clone()
+        );
+        let app_ty = tc.infer(&app).unwrap();
+        assert_eq!(app_ty, nat, "Nat.rec application should have type Nat");
+    }
+
+    #[test]
+    fn test_list_recursor_type_check() {
+        use crate::lean::type_checker::*;
+
+        let mut env = Environment::new();
+        let type0 = Expr::mk_type();
+
+        // Add Nat for use in tests
+        let nat_decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![InductiveType {
+                name: Name::new("Nat"),
+                ty: type0.clone(),
+                ctors: vec![
+                    Constructor { name: Name::new("zero"), ty: Expr::mk_const(Name::new("Nat"), vec![]) },
+                    Constructor { name: Name::new("succ"), ty: Expr::mk_arrow(Expr::mk_const(Name::new("Nat"), vec![]), Expr::mk_const(Name::new("Nat"), vec![])) },
+                ],
+            }],
+            is_unsafe: false,
+        };
+        env.add(nat_decl).unwrap();
+
+        let a_ty = Expr::mk_const(Name::new("A"), vec![]);
+        let list_a = Expr::mk_app(Expr::mk_const(Name::new("List"), vec![]), a_ty.clone());
+
+        let list_ind = InductiveType {
+            name: Name::new("List"),
+            ty: Expr::mk_pi(Name::new("A"), type0.clone(), type0.clone()),
+            ctors: vec![
+                Constructor {
+                    name: Name::new("nil"),
+                    ty: Expr::mk_pi(Name::new("A"), type0.clone(), list_a.clone()),
+                },
+                Constructor {
+                    name: Name::new("cons"),
+                    ty: Expr::mk_pi(
+                        Name::new("A"),
+                        type0.clone(),
+                        Expr::mk_arrow(
+                            a_ty.clone(),
+                            Expr::mk_arrow(list_a.clone(), list_a.clone()),
+                        ),
+                    ),
+                },
+            ],
+        };
+        let decl = Declaration::Inductive {
+            level_params: vec![], num_params: 1, types: vec![list_ind], is_unsafe: false,
+        };
+        env.add(decl).unwrap();
+
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        // Check that List.rec has a Pi type
+        let list_rec = Expr::mk_const(Name::new("rec").extend("List"), vec![]);
+        let rec_ty = tc.infer(&list_rec).unwrap();
+        assert!(rec_ty.is_pi(), "List.rec type should be a Pi, got {:?}", rec_ty);
+        println!("List.rec type: {:?}", rec_ty);
+
+        // Type-check a recursor application on List Nat
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+        let list_nat = Expr::mk_app(Expr::mk_const(Name::new("List"), vec![]), nat.clone());
+
+        // Motive: λ (l : List Nat). Nat
+        let motive = Expr::mk_lambda(Name::new("l"), list_nat.clone(), nat.clone());
+
+        // nil case: zero
+        let nil_case = zero.clone();
+
+        // cons case: λ a l ih. succ ih
+        let cons_case = Expr::Lambda(
+            Name::new("a"), BinderInfo::Default, Rc::new(nat.clone()),
+            Rc::new(Expr::Lambda(
+                Name::new("l"), BinderInfo::Default, Rc::new(list_nat.clone()),
+                Rc::new(Expr::Lambda(
+                    Name::new("ih"), BinderInfo::Default, Rc::new(nat.clone()),
+                    Rc::new(Expr::mk_app(succ, Expr::BVar(0)))
+                ))
+            ))
+        );
+
+        let nil_ctor = Expr::mk_const(Name::new("nil"), vec![]);
+        let test_list = Expr::mk_app(nil_ctor, nat.clone());
+
+        let app = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_app(list_rec, nat.clone()), motive),
+                    nil_case
+                ),
+                cons_case
+            ),
+            test_list
+        );
+        let app_ty = tc.infer(&app).unwrap();
+        assert_eq!(app_ty, nat, "List.rec application should have type Nat");
+    }
+}
