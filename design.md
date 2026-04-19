@@ -8,6 +8,40 @@
 
 这个目标的独特之处在于：它既是**一个数学定理**，也是**一个可执行程序**。证明过程本身通过类型检查器验证，而类型检查器的归约机制底层由一个独立的 rewrite 引擎驱动。
 
+### 1.1 核心设计原则
+
+**单一真相源 (Single Source of Truth)**
+
+CIC (Calculus of Inductive Constructions) 的核心规则由一份独立的理论文档维护（`kernel-theory.md`）。这份文档是唯一的权威来源，定义了：
+- 表达式语法（Expr AST）
+- 类型规则（typing judgments）
+- 归约语义（beta, zeta, delta, iota, eta）
+- 归纳类型和 recursor 生成规则
+- 定义等价（definitional equality）
+
+**独立实现 (Independent Implementations)**
+
+基于同一份理论文档，两个实现完全独立开发，**互不参考对方代码**：
+- **Rust Kernel**: 依赖类型检查器、环境管理、recursor 自动生成
+- **Maude Engine**: 纯粹的等式重写引擎，用 Maude 规则表达 CIC 的归约语义
+
+**交叉验证 (Cross-Validation)**
+
+两个独立实现对同一组测试用例应该产生完全相同的结果。任何不一致都表明：
+- 理论文档有歧义/错误，或
+- 至少一个实现有 bug
+
+验证矩阵见第 7 节。
+
+### 1.2 数学目标
+
+采用与大学数学分析完全一致的表示和证明思路：
+- `forall epsilon > 0, exists N, forall n > N, P`
+- `epsilon` 用 `1/(k+1)` 表示（`frac_inv k`）
+- 柯西序列定义、柯西等价、极限构造
+- 实数完备性：`is_cauchy a -> exists L, seq_converges_to a L`
+- **所有定理必须无 axiom**，通过 CIC 的构造性规则证明
+
 ## 2. 分层架构
 
 整个系统分为三个独立层次，每一层都有明确的对标原始程序用于验证正确性。

@@ -444,8 +444,11 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Proof irrelevance: any two terms of the same Prop type are defeq
+        // A type is a proposition if it is Sort(0) itself, or its type is Sort(0)
         if let (Ok(t_ty), Ok(s_ty)) = (self.infer(t), self.infer(s)) {
-            if self.is_prop_type(&t_ty) && self.is_prop_type(&s_ty) && self.is_def_eq(&t_ty, &s_ty) {
+            let t_is_prop = self.is_prop_type(&t_ty) || self.is_prop(&t_ty);
+            let s_is_prop = self.is_prop_type(&s_ty) || self.is_prop(&s_ty);
+            if t_is_prop && s_is_prop && self.is_def_eq(&t_ty, &s_ty) {
                 return true;
             }
         }

@@ -221,14 +221,16 @@ impl Environment {
 
             for (cidx, ctor) in ind_type.ctors.iter().enumerate() {
                 let nfields = Self::count_fields(&ctor.ty, num_params);
+                let ctor_is_rec = Self::ctor_is_recursive(&ctor.ty, num_params, &ind_type.name);
                 let rhs = Self::mk_recursor_rhs(
+                    &ctor.ty,
                     num_params,
                     nfields,
                     num_minors,
                     cidx as u64,
                     &ind_type.name,
                     &level_params,
-                    is_rec,
+                    ctor_is_rec,
                 );
                 rules.push(RecursorRule {
                     ctor: ctor.name.clone(),
@@ -361,6 +363,43 @@ impl Environment {
         }
     }
 
+    /// Map bound variable indices in an expression using a function.
+    fn map_bvars(e: &Expr, f: &dyn Fn(u64) -> u64) -> Expr {
+        match e {
+            Expr::BVar(i) => Expr::mk_bvar(f(*i)),
+            Expr::App(a, b) => Expr::mk_app(
+                Self::map_bvars(a, f),
+                Self::map_bvars(b, f),
+            ),
+            Expr::Pi(n, bi, ty, body) => Expr::Pi(
+                n.clone(),
+                *bi,
+                Rc::new(Self::map_bvars(ty, f)),
+                Rc::new(Self::map_bvars(body, f)),
+            ),
+            Expr::Lambda(n, bi, ty, body) => Expr::Lambda(
+                n.clone(),
+                *bi,
+                Rc::new(Self::map_bvars(ty, f)),
+                Rc::new(Self::map_bvars(body, f)),
+            ),
+            Expr::Let(n, ty, val, body, nd) => Expr::Let(
+                n.clone(),
+                Rc::new(Self::map_bvars(ty, f)),
+                Rc::new(Self::map_bvars(val, f)),
+                Rc::new(Self::map_bvars(body, f)),
+                *nd,
+            ),
+            Expr::Sort(l) => Expr::Sort(l.clone()),
+            Expr::Const(n, ls) => Expr::Const(n.clone(), ls.clone()),
+            Expr::FVar(n) => Expr::FVar(n.clone()),
+            Expr::MVar(n) => Expr::MVar(n.clone()),
+            Expr::Lit(l) => Expr::Lit(l.clone()),
+            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(Self::map_bvars(e, f))),
+            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(Self::map_bvars(e, f))),
+        }
+    }
+
     /// Build the recursor rule RHS for a constructor.
     ///
     /// The result is wrapped in lambdas with binding order (from outside in):
@@ -375,6 +414,7 @@ impl Environment {
     ///   BVar(nfields + n_minors + 1) = last param
     ///   BVar(nfields + n_minors + num_params) = first param
     fn mk_recursor_rhs(
+        ctor_ty: &Expr,
         num_params: u64,
         nfields: u64,
         num_minors: u64,
@@ -417,6 +457,30 @@ impl Environment {
             for i in 0..num_minors {
                 let minor_bvar_idx = nfields + num_minors - 1 - i;
                 rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(minor_bvar_idx));
+            }
+
+            // Extract index expressions from constructor return type and map BVars to recursor context.
+            // In constructor return type (after skipping params+fields):
+            //   BVar(j) for j < nfields refers to field j (from innermost)
+            //   BVar(j) for j >= nfields refers to param (j - nfields) from innermost
+            // In recursor rule body:
+            //   BVar(j) for j < nfields refers to field j (from innermost)
+            //   BVar(j) for j >= nfields refers to param, shifted by num_minors + 1
+            let ctor_return = Self::ctor_return_type(ctor_ty, num_params);
+            let index_exprs = Self::extract_indices_from_return_type(&ctor_return, ind_name, num_params);
+            let mapped_indices: Vec<Expr> = index_exprs.iter()
+                .map(|e| Self::map_bvars(e, &|j| {
+                    if j < nfields {
+                        j
+                    } else {
+                        num_minors + 1 + j
+                    }
+                }))
+                .collect();
+
+            // Apply indices to the recursive call
+            for idx_expr in &mapped_indices {
+                rec_call = Expr::mk_app(rec_call, idx_expr.clone());
             }
 
             // Apply the recursive field (last field, innermost binder = BVar(0))
@@ -469,9 +533,78 @@ impl Environment {
         result
     }
 
+    /// Extract index types from the inductive type (Pi binders after params).
+    fn extract_index_types(ty: &Expr, num_params: u64, num_indices: u64) -> Vec<(Name, Expr)> {
+        let mut result = Vec::new();
+        let mut current = ty;
+        // Skip parameters
+        for _ in 0..num_params {
+            if let Expr::Pi(_, _, _, body) = current {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        // Collect index types
+        for _ in 0..num_indices {
+            if let Expr::Pi(name, _, domain, body) = current {
+                result.push((name.clone(), (**domain).clone()));
+                current = body;
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Extract the constructor return type by skipping params and fields.
+    fn ctor_return_type(ctor_ty: &Expr, num_params: u64) -> Expr {
+        let mut current = ctor_ty;
+        // Skip parameters
+        for _ in 0..num_params {
+            if let Expr::Pi(_, _, _, body) = current {
+                current = body;
+            } else {
+                break;
+            }
+        }
+        // Skip fields
+        while let Expr::Pi(_, _, _, body) = current {
+            current = body;
+        }
+        current.clone()
+    }
+
+    /// Extract index expressions from a constructor return type.
+    /// The return type is expected to be `I params indices`.
+    /// Returns the list of index expressions (as Expr).
+    fn extract_indices_from_return_type(return_type: &Expr, ind_name: &Name, num_params: u64) -> Vec<Expr> {
+        let mut indices = Vec::new();
+        let mut current = return_type;
+        // Unwrap applications to get to the head
+        let mut args = Vec::new();
+        while let Expr::App(f, a) = current {
+            args.push((**a).clone());
+            current = f;
+        }
+        args.reverse();
+        // Head should be the inductive type constant
+        if let Expr::Const(name, _) = current {
+            if name == ind_name {
+                // Skip params
+                let start = num_params as usize;
+                for i in start..args.len() {
+                    indices.push(args[i].clone());
+                }
+            }
+        }
+        indices
+    }
+
     /// Generate a recursor type for the inductive type.
     /// The recursor type is:
-    ///   (params) -> (P : I params indices -> Sort u) -> minor_premises -> (x : I params indices) -> P x
+    ///   (params) -> (P : forall indices, I params indices -> Sort u) -> minor_premises ->
+    ///   (indices) -> (x : I params indices) -> P indices x
     fn mk_recursor_type(
         ind_name: &Name,
         ind_ty: &Expr,
@@ -483,31 +616,46 @@ impl Environment {
         let u = Name::new("u");
         let u_level = Level::Param(u.clone());
 
-        // Innermost expression: P x
-        // In the final structure (inside x): P = BVar(num_minors + 1), x = BVar(0)
-        let mut result = Expr::mk_app(Expr::mk_bvar(num_minors + 1), Expr::mk_bvar(0));
+        // Innermost expression: P indices x
+        // In the final structure (inside x):
+        //   x = BVar(0)
+        //   index_{num_indices-1} = BVar(1), ..., index_0 = BVar(num_indices)
+        //   minor_{num_minors-1} = BVar(num_indices + 1), ..., minor_0 = BVar(num_indices + num_minors)
+        //   P = BVar(num_indices + num_minors + 1)
+        //   params = after P
+        let mut result = Expr::mk_bvar(num_indices + num_minors + 1);
+        // Apply indices to P (index_0 outermost, so highest BVar first)
+        for i in 0..num_indices {
+            result = Expr::mk_app(result, Expr::mk_bvar(num_indices - i));
+        }
+        result = Expr::mk_app(result, Expr::mk_bvar(0));
 
         // Wrap major premise: (x : I params indices)
-        // In x's domain, params start at BVar(num_minors + 1) because
-        // inside-out binders are: x, minors..., P, params...
-        let x_ty = Self::mk_inductive_app(ind_name, num_params, num_indices, num_minors + 1);
+        // In x's domain, params start at BVar(num_indices + num_minors + 1) and
+        // indices start right after params.
+        let x_ty = Self::mk_inductive_app(ind_name, num_params, num_indices, num_indices + num_minors + 1);
         result = Expr::mk_pi(Name::new("x"), x_ty, result);
+
+        // Wrap indices (from last to first so i0 is outermost)
+        let index_types = Self::extract_index_types(ind_ty, num_params, num_indices);
+        for (name, ty) in index_types.iter().rev() {
+            result = Expr::mk_pi(name.clone(), ty.clone(), result);
+        }
 
         // Wrap minor premises (from last to first so m0 is outermost)
         for cidx in (0..num_minors).rev() {
             let minor_ty = Self::mk_minor_premise_type(
                 &ctors[cidx as usize],
                 num_params,
+                num_indices,
                 ind_name,
                 cidx,
             );
             result = Expr::mk_pi(Name::new(&format!("m{}", cidx)), minor_ty, result);
         }
 
-        // Wrap motive: (P : I params indices -> Sort u)
-        // In P's domain, params start at BVar(0) because params are the
-        // only binders outside P.
-        let motive_ty = Self::mk_motive_type(ind_name, num_params, num_indices, u_level);
+        // Wrap motive: (P : forall indices, I params indices -> Sort u)
+        let motive_ty = Self::mk_motive_type(ind_name, ind_ty, num_params, num_indices, u_level);
         result = Expr::mk_pi(Name::new("P"), motive_ty, result);
 
         // Wrap parameters (from last to first so p0 is outermost)
@@ -519,18 +667,25 @@ impl Environment {
         result
     }
 
-    /// Build the motive type: I params indices -> Sort u
+    /// Build the motive type: forall indices, I params indices -> Sort u
     /// For simplicity, we use Type (Sort 1) as the motive return sort.
-    /// In a full Lean kernel, this would be a fresh universe parameter.
     fn mk_motive_type(
         ind_name: &Name,
+        ind_ty: &Expr,
         num_params: u64,
         num_indices: u64,
         _u_level: Level,
     ) -> Expr {
-        // In P's domain, params are the innermost binders (start at BVar 0).
+        // In P's domain, params are the innermost binders (start at BVar 0),
+        // and indices come after params.
         let ind_app = Self::mk_inductive_app(ind_name, num_params, num_indices, 0);
-        Expr::mk_arrow(ind_app, Expr::mk_type())
+        let mut result = Expr::mk_arrow(ind_app, Expr::mk_type());
+        // Quantify over indices (from last to first so i0 is outermost)
+        let index_types = Self::extract_index_types(ind_ty, num_params, num_indices);
+        for (name, ty) in index_types.iter().rev() {
+            result = Expr::mk_pi(name.clone(), ty.clone(), result);
+        }
+        result
     }
 
     /// Build an application of the inductive type to params and indices (as BVars).
@@ -552,6 +707,7 @@ impl Environment {
     fn mk_minor_premise_type(
         ctor: &Constructor,
         num_params: u64,
+        _num_indices: u64,
         ind_name: &Name,
         cidx: u64,
     ) -> Expr {
@@ -576,6 +732,15 @@ impl Environment {
             .count();
         let total_inner = fields.len() + num_ihs;
 
+        // Extract index expressions from constructor return type.
+        // These use de Bruijn indices relative to the constructor's field binders.
+        // We shift them by +num_ihs because ih binders are interleaved inside fields.
+        let ctor_return = Self::ctor_return_type(&ctor.ty, num_params);
+        let index_exprs: Vec<Expr> = Self::extract_indices_from_return_type(&ctor_return, ind_name, num_params)
+            .into_iter()
+            .map(|e| e.lift_loose_bvars(num_ihs as u64, 0))
+            .collect();
+
         // In the minor premise domain, the recursor-level binders from inside out are:
         //   preceding minors (cidx of them), P (1), params (num_params)
         // So P is at BVar(fidx + cidx) when inside field fidx's domain,
@@ -585,7 +750,7 @@ impl Environment {
         //   P is at BVar(total_inner + cidx)
         //   param i is at BVar(total_inner + cidx + 1 + i)
 
-        // Build return type: P (ctor params fields)
+        // Build return type: P indices (ctor params fields)
         let mut ctor_app = Expr::mk_const(ctor.name.clone(), vec![]);
         // Apply params
         for i in 0..num_params {
@@ -597,7 +762,13 @@ impl Environment {
             let field_bvar = (total_inner - 1 - fidx) as u64;
             ctor_app = Expr::mk_app(ctor_app, Expr::mk_bvar(field_bvar));
         }
-        let mut result = Expr::mk_app(Expr::mk_bvar(total_inner as u64 + cidx), ctor_app);
+
+        let mut result = Expr::mk_bvar(total_inner as u64 + cidx);
+        // Apply indices to P
+        for idx_expr in &index_exprs {
+            result = Expr::mk_app(result, idx_expr.clone());
+        }
+        result = Expr::mk_app(result, ctor_app);
 
         // Wrap field binders from inside out (last field first).
         // For each field, wrap ih FIRST (making it inner), then field (outer).
@@ -605,10 +776,14 @@ impl Environment {
             let is_recursive = Self::expr_contains_const(&fields[fidx].1, ind_name);
 
             if is_recursive {
-                // ih_ty = P field
+                // ih_ty = P indices field
                 // In ih_ty: field = BVar(0), P = BVar(fidx + 1 + cidx)
                 let p_idx_in_ih_ty = (fidx + 1) as u64 + cidx;
-                let ih_ty = Expr::mk_app(Expr::mk_bvar(p_idx_in_ih_ty), Expr::mk_bvar(0));
+                let mut ih_ty = Expr::mk_bvar(p_idx_in_ih_ty);
+                for idx_expr in &index_exprs {
+                    ih_ty = Expr::mk_app(ih_ty, idx_expr.clone());
+                }
+                ih_ty = Expr::mk_app(ih_ty, Expr::mk_bvar(0));
                 result = Expr::mk_pi(Name::new("ih"), ih_ty, result);
             }
 
@@ -1298,5 +1473,157 @@ mod tests {
         );
         let app_ty = tc.infer(&app).unwrap();
         assert_eq!(app_ty, nat, "List.rec application should have type Nat");
+    }
+
+    #[test]
+    fn test_add_inductive_le() {
+        use crate::lean::type_checker::*;
+
+        let mut env = Environment::new();
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+        let prop = Expr::mk_prop();
+
+        // le : Nat -> Nat -> Prop
+        let le_ty = Expr::mk_pi(
+            Name::new("m"),
+            nat.clone(),
+            Expr::mk_pi(Name::new("n"), nat.clone(), prop.clone()),
+        );
+
+        // le_zero : forall (n : Nat), le zero n
+        let le_zero_ty = Expr::mk_pi(
+            Name::new("n"),
+            nat.clone(),
+            Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("le"), vec![]), zero.clone()),
+                Expr::mk_bvar(0),
+            ),
+        );
+
+        // le_succ : forall (m : Nat), forall (n : Nat), le m n -> le (succ m) (succ n)
+        let le_succ_ty = Expr::mk_pi(
+            Name::new("m"),
+            nat.clone(),
+            Expr::mk_pi(
+                Name::new("n"),
+                nat.clone(),
+                Expr::mk_pi(
+                    Name::new("h"),
+                    Expr::mk_app(
+                        Expr::mk_app(Expr::mk_const(Name::new("le"), vec![]), Expr::mk_bvar(1)),
+                        Expr::mk_bvar(0),
+                    ),
+                    Expr::mk_app(
+                        Expr::mk_app(
+                            Expr::mk_const(Name::new("le"), vec![]),
+                            Expr::mk_app(succ.clone(), Expr::mk_bvar(2)),
+                        ),
+                        Expr::mk_app(succ.clone(), Expr::mk_bvar(1)),
+                    ),
+                ),
+            ),
+        );
+
+        let le_ind = InductiveType {
+            name: Name::new("le"),
+            ty: le_ty,
+            ctors: vec![
+                Constructor { name: Name::new("le_zero"), ty: le_zero_ty },
+                Constructor { name: Name::new("le_succ"), ty: le_succ_ty },
+            ],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![le_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        let le_info = env.find(&Name::new("le")).unwrap().to_inductive_val().unwrap();
+        assert_eq!(le_info.num_params, 0);
+        assert_eq!(le_info.num_indices, 2);
+        assert!(le_info.is_rec);
+
+        let rec_info = env.find(&Name::new("rec").extend("le")).unwrap().to_recursor_val().unwrap();
+        assert_eq!(rec_info.num_params, 0);
+        assert_eq!(rec_info.num_indices, 2);
+        assert_eq!(rec_info.num_minors, 2);
+
+        // Type-check the recursor
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let le_rec = Expr::mk_const(Name::new("rec").extend("le"), vec![]);
+        let rec_ty = tc.infer(&le_rec).unwrap();
+        assert!(rec_ty.is_pi(), "le.rec type should be a Pi, got {:?}", rec_ty);
+
+        // Build a motive: λ m n h. Nat
+        let motive = Expr::mk_lambda(
+            Name::new("m"),
+            nat.clone(),
+            Expr::mk_lambda(
+                Name::new("n"),
+                nat.clone(),
+                Expr::mk_lambda(
+                    Name::new("h"),
+                    Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("le"), vec![]), Expr::mk_bvar(1)), Expr::mk_bvar(0)),
+                    nat.clone(),
+                ),
+            ),
+        );
+
+        // le_zero case: λ n. zero
+        let zero_case = Expr::mk_lambda(Name::new("n"), nat.clone(), zero.clone());
+
+        // le_succ case: λ m n h ih. succ ih
+        let succ_case = Expr::mk_lambda(
+            Name::new("m"),
+            nat.clone(),
+            Expr::mk_lambda(
+                Name::new("n"),
+                nat.clone(),
+                Expr::mk_lambda(
+                    Name::new("h"),
+                    Expr::mk_app(
+                        Expr::mk_app(Expr::mk_const(Name::new("le"), vec![]), Expr::mk_bvar(1)),
+                        Expr::mk_bvar(0),
+                    ),
+                    Expr::mk_lambda(
+                        Name::new("ih"),
+                        nat.clone(),
+                        Expr::mk_app(succ.clone(), Expr::mk_bvar(0)),
+                    ),
+                ),
+            ),
+        );
+
+        // Test: le.rec Nat motive zero_case succ_case (succ zero) (succ zero) (le_succ zero zero (le_zero zero))
+        let one = Expr::mk_app(succ.clone(), zero.clone());
+        let le_zero_zero = Expr::mk_app(Expr::mk_const(Name::new("le_zero"), vec![]), zero.clone());
+        let le_succ_001 = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("le_succ"), vec![]), zero.clone()), zero.clone()),
+            le_zero_zero.clone(),
+        );
+
+        let app = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_app(le_rec.clone(), motive.clone()), zero_case.clone()),
+                    succ_case,
+                ),
+                one.clone(),
+            ),
+            one.clone(),
+        );
+        let app = Expr::mk_app(app, le_succ_001);
+
+        let result = tc.nf(&app);
+        assert_eq!(result, one, "le.rec on le_succ should reduce to succ (le.rec ... le_zero)");
     }
 }
