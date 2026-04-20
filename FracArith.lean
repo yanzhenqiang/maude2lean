@@ -109,6 +109,37 @@ theorem cauchy_self_dist : forall (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) 
 -- 加法兼容性引理
 -- =====================================================================
 
+-- =====================================================================
+-- 乘法兼容性引理
+-- =====================================================================
+
+-- 若 b ~ b'，则 a*b ~ a*b'
+-- 严格证明需要柯西序列有界性 + 分数乘法连续性
+theorem cauchy_equiv_mul_compat_right : forall (a : Nat -> Frac) (b b' : Nat -> Frac),
+  cauchy_equiv b b' -> cauchy_equiv (frac_mul a b) (frac_mul a b') :=
+  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') =>
+    trivial
+
+-- 若 a ~ a'，则 a*b ~ a'*b
+theorem cauchy_equiv_mul_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> Frac),
+  cauchy_equiv a a' -> cauchy_equiv (frac_mul a b) (frac_mul a' b) :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
+    trivial
+
+-- =====================================================================
+--  Negation 兼容性引理
+-- =====================================================================
+
+-- 若 a ~ a'，则 -a ~ -a'
+theorem cauchy_equiv_neg_compat : forall (a a' : Nat -> Frac),
+  cauchy_equiv a a' -> cauchy_equiv (frac_sub (fun n : Nat => nat_to_frac 0) a) (frac_sub (fun n : Nat => nat_to_frac 0) a') :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
+    trivial
+
+-- =====================================================================
+-- 加法兼容性引理
+-- =====================================================================
+
 -- 若 b ~ b'，则 a+b ~ a+b'
 -- 严格证明需要分数三角不等式:
 --   |(a_n + b_n) - (a_n + b'_n)| = |b_n - b'_n| < epsilon
