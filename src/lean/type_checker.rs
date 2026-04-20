@@ -524,11 +524,19 @@ impl<'a> TypeChecker<'a> {
             let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
                 Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
             let a_to_b = Expr::mk_arrow(Expr::mk_bvar(2), Expr::mk_bvar(1));
+            // compat: forall a b, r a b -> Eq B (f a) (f b)
+            let f_a = Expr::mk_app(Expr::mk_bvar(2), Expr::mk_bvar(1));
+            let f_b = Expr::mk_app(Expr::mk_bvar(2), Expr::mk_bvar(0));
+            let eq_app = Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_const(Name::new("Eq"), vec![]), Expr::mk_bvar(3)),
+                    f_a),
+                f_b);
             let compat_ty = Expr::mk_pi(Name::new("a"), Expr::mk_bvar(3),
                 Expr::mk_pi(Name::new("b"), Expr::mk_bvar(4),
                     Expr::mk_pi(Name::new("_"),
                         Expr::mk_app(Expr::mk_app(Expr::mk_bvar(4), Expr::mk_bvar(1)), Expr::mk_bvar(0)),
-                        Expr::mk_bvar(3))));
+                        eq_app)));
             let quot_app = Expr::mk_app(
                 Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u]), Expr::mk_bvar(4)),
                 Expr::mk_bvar(3));

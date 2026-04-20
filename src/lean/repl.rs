@@ -512,6 +512,42 @@ impl Repl {
                 let expr = self.parse_and_convert(rest)?;
                 engine.tactic_rewrite(&expr)
             }
+            "induction" => {
+                if rest.is_empty() {
+                    return Err("induction requires a variable name".to_string());
+                }
+                let var_name = rest.trim();
+                let var_expr = Expr::mk_fvar(Name::new(var_name));
+                engine.tactic_induction(&var_expr)
+            }
+            "have" => {
+                if rest.is_empty() {
+                    return Err("have requires name, type and proof".to_string());
+                }
+                // Parse: have name : type := proof
+                let have_rest = rest.trim();
+                let name_end = have_rest.find(|c: char| c == ':' || c == ' ')
+                    .unwrap_or(have_rest.len());
+                let name = have_rest[..name_end].trim().to_string();
+                let after_name = have_rest[name_end..].trim_start();
+
+                if !after_name.starts_with(':') {
+                    return Err("have syntax: have <name> : <type> := <proof>".to_string());
+                }
+                let after_colon = after_name[1..].trim_start();
+
+                let assign_pos = after_colon.find(":=");
+                if assign_pos.is_none() {
+                    return Err("have syntax: have <name> : <type> := <proof>".to_string());
+                }
+                let assign_pos = assign_pos.unwrap();
+                let ty_str = after_colon[..assign_pos].trim();
+                let proof_str = after_colon[assign_pos + 2..].trim();
+
+                let ty = self.parse_and_convert(ty_str)?;
+                let proof = self.parse_and_convert(proof_str)?;
+                engine.tactic_have(&name, &ty, &proof)
+            }
             _ => Err(format!("Unknown tactic: {}", tactic_name)),
         }
     }
@@ -917,9 +953,22 @@ impl Repl {
         });
         let _ = self.env.add(choice_decl);
 
+        // sorry_prop : Π (P : Prop), P
+        let sorry_prop_ty = Expr::mk_pi(Name::new("P"), prop.clone(), Expr::mk_bvar(0));
+        let sorry_prop_decl = Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal {
+                name: Name::new("sorry_prop"),
+                level_params: vec![],
+                ty: sorry_prop_ty,
+            },
+            is_unsafe: false,
+        });
+        let _ = self.env.add(sorry_prop_decl);
+
         self.tc_state = TypeCheckerState::new(self.env.clone());
         self.env_bindings.insert("propext".to_string(), Expr::mk_const(Name::new("propext"), vec![]));
         self.env_bindings.insert("choice".to_string(), Expr::mk_const(Name::new("choice"), vec![]));
+        self.env_bindings.insert("sorry_prop".to_string(), Expr::mk_const(Name::new("sorry_prop"), vec![]));
     }
 
     fn load_quot(&mut self) {
