@@ -151,6 +151,7 @@ pub enum QuotKind {
     Mk,
     Lift,
     Ind,
+    Sound,
 }
 
 /// Quotient declaration value

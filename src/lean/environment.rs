@@ -140,8 +140,14 @@ impl Environment {
 
         let ind_name = Name::new("Quot").extend("ind");
         self.constants.insert(ind_name.clone(), ConstantInfo::QuotInfo(QuotVal {
-            constant_val: ConstantVal { name: ind_name, level_params: vec![u.clone()], ty: dummy_ty },
+            constant_val: ConstantVal { name: ind_name, level_params: vec![u.clone()], ty: dummy_ty.clone() },
             kind: QuotKind::Ind,
+        }));
+
+        let sound_name = Name::new("Quot").extend("sound");
+        self.constants.insert(sound_name.clone(), ConstantInfo::QuotInfo(QuotVal {
+            constant_val: ConstantVal { name: sound_name, level_params: vec![u.clone()], ty: dummy_ty },
+            kind: QuotKind::Sound,
         }));
 
         self.mark_quot_initialized();

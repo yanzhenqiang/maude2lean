@@ -501,6 +501,39 @@ impl<'a> TypeChecker<'a> {
                     Expr::mk_pi(Name::new("B"), b_ty,
                         Expr::mk_pi(Name::new("h"), h_ty,
                             Expr::mk_pi(Name::new("q"), quot_app, ret_ty))))))
+        } else if name == &Name::new("Quot").extend("sound") {
+            // Quot.sound.{u} : (A : Sort u) -> (r : A -> A -> Prop) -> (a : A) -> (b : A) ->
+            //   r a b -> Eq (Quot A r) (Quot.mk A r a) (Quot.mk A r b)
+            let u = levels.get(0).cloned().unwrap_or(Level::Param(Name::new("u")));
+            let sort_u = Expr::mk_sort(u.clone());
+            let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
+            let h_ty = Expr::mk_app(
+                Expr::mk_app(Expr::mk_bvar(2), Expr::mk_bvar(1)),
+                Expr::mk_bvar(0));
+            let quot_app = Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u.clone()]), Expr::mk_bvar(4)),
+                Expr::mk_bvar(3));
+            let mk_a = Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_const(Name::new("Quot").extend("mk"), vec![u.clone()]), Expr::mk_bvar(4)),
+                    Expr::mk_bvar(3)),
+                Expr::mk_bvar(2));
+            let mk_b = Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_const(Name::new("Quot").extend("mk"), vec![u.clone()]), Expr::mk_bvar(4)),
+                    Expr::mk_bvar(3)),
+                Expr::mk_bvar(1));
+            let eq_app = Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_app(Expr::mk_const(Name::new("Eq"), vec![]), quot_app),
+                    mk_a),
+                mk_b);
+            Ok(Expr::mk_pi(Name::new("A"), sort_u,
+                Expr::mk_pi(Name::new("r"), r_ty,
+                    Expr::mk_pi(Name::new("a"), Expr::mk_bvar(1),
+                        Expr::mk_pi(Name::new("b"), Expr::mk_bvar(2),
+                            Expr::mk_pi(Name::new("_"), h_ty, eq_app))))))
         } else {
             Err(format!("Unknown quot constant: {}", name.to_string()))
         }

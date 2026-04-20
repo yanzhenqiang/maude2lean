@@ -13,3 +13,9 @@ def real_add (x : Real) (y : Real) : Real :=
   ) (fun a a' h => trivial) x
 
 def real_zero : Real := real_mk (fun n : Nat => nat_to_frac 0)
+
+-- 代表元唯一性：等价的柯西序列表示同一个实数
+theorem real_mk_eq_of_cauchy_equiv : forall (a : Nat -> Frac), forall (b : Nat -> Frac),
+  cauchy_equiv a b -> Eq Real (real_mk a) (real_mk b) :=
+  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a b) =>
+    Quot.sound (Nat -> Frac) cauchy_equiv a b h

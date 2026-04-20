@@ -666,6 +666,7 @@ impl Repl {
         self.env_bindings.insert("Quot.mk".to_string(), Expr::mk_const(Name::new("Quot").extend("mk"), vec![]));
         self.env_bindings.insert("Quot.lift".to_string(), Expr::mk_const(Name::new("Quot").extend("lift"), vec![]));
         self.env_bindings.insert("Quot.ind".to_string(), Expr::mk_const(Name::new("Quot").extend("ind"), vec![]));
+        self.env_bindings.insert("Quot.sound".to_string(), Expr::mk_const(Name::new("Quot").extend("sound"), vec![]));
     }
 }
 
