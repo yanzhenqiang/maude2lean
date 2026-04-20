@@ -802,6 +802,80 @@ impl<'a> TypeChecker<'a> {
                     self.st.assign_level_param(p, n1.clone())
                 }
             }
+            // Max/Max matching: try both permutations
+            (Level::Max(a1, b1), Level::Max(a2, b2)) => {
+                (self.is_def_eq_levels(a1, a2) && self.is_def_eq_levels(b1, b2))
+                    || (self.is_def_eq_levels(a1, b2) && self.is_def_eq_levels(b1, a2))
+            }
+            // IMax/IMax matching
+            (Level::IMax(a1, b1), Level::IMax(a2, b2)) => {
+                // IMax(a, b) = if b = 0 then 0 else Max(a, b)
+                // Try direct matching first
+                if self.is_def_eq_levels(a1, a2) && self.is_def_eq_levels(b1, b2) {
+                    return true;
+                }
+                // Handle special case: IMax(a, 0) = 0 = IMax(b, 0)
+                if b1.is_zero() && b2.is_zero() {
+                    return true;
+                }
+                false
+            }
+            // Max with Succ: try to match one branch
+            (Level::Max(a, b), Level::Succ(s)) | (Level::Succ(s), Level::Max(a, b)) => {
+                (self.is_def_eq_levels(a, &Level::Succ(s.clone())) && self.is_level_leq(b, &Level::Succ(s.clone())))
+                    || (self.is_def_eq_levels(b, &Level::Succ(s.clone())) && self.is_level_leq(a, &Level::Succ(s.clone())))
+            }
+            // IMax with Zero: IMax(a, 0) = 0
+            (Level::IMax(_, b), Level::Zero) | (Level::Zero, Level::IMax(_, b)) => {
+                b.is_zero()
+            }
+            // IMax with Succ/Param: IMax(a, b) = Max(a, b) when b != 0
+            (Level::IMax(a, b), other) | (other, Level::IMax(a, b)) => {
+                if !b.is_zero() {
+                    self.is_def_eq_levels(&Level::Max(a.clone(), b.clone()), other)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if level l1 <= l2 (structural subsumption)
+    fn is_level_leq(&mut self, l1: &Level, l2: &Level) -> bool {
+        let n1 = l1.normalize();
+        let n2 = l2.normalize();
+        if n1.is_equivalent(&n2) {
+            return true;
+        }
+        match (&n1, &n2) {
+            (Level::Zero, _) => true,
+            (_, Level::Zero) => false,
+            (Level::Succ(s1), Level::Succ(s2)) => self.is_level_leq(s1, s2),
+            (a, Level::Max(b, c)) => self.is_level_leq(a, b) || self.is_level_leq(a, c),
+            (Level::Max(a, b), c) => self.is_level_leq(a, c) && self.is_level_leq(b, c),
+            (a, Level::IMax(b, c)) => {
+                if c.is_zero() {
+                    a.is_zero()
+                } else {
+                    self.is_level_leq(a, b) || self.is_level_leq(a, c)
+                }
+            }
+            (Level::Param(p), _) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_level_leq(&subst, &n2)
+                } else {
+                    // Try to assign p = l2 if l2 is simpler
+                    self.st.assign_level_param(p, n2.clone())
+                }
+            }
+            (_, Level::Param(p)) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_level_leq(&n1, &subst)
+                } else {
+                    false
+                }
+            }
             _ => false,
         }
     }
