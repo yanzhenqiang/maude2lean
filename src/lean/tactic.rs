@@ -1,0 +1,403 @@
+use super::declaration::*;
+use super::environment::Environment;
+use super::expr::*;
+use super::local_ctx::{LocalCtx, LocalDecl};
+use super::type_checker::{TypeChecker, TypeCheckerState};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+/// A proof goal: local context + target type + placeholder metavariable
+#[derive(Debug, Clone)]
+pub struct Goal {
+    pub lctx: LocalCtx,
+    pub target: Expr,
+    pub mvar: Name,
+}
+
+/// Lightweight tactic engine
+pub struct TacticEngine<'a> {
+    pub st: &'a mut TypeCheckerState,
+    pub env: &'a Environment,
+    pub env_bindings: &'a HashMap<String, Expr>,
+    /// Stack of open goals (last = current)
+    pub goals: Vec<Goal>,
+    /// Next fresh index for MVars
+    next_mvar_idx: u64,
+    /// MVar assignments accumulated during tactic execution
+    pub mvar_assignments: HashMap<Name, Expr>,
+}
+
+impl<'a> TacticEngine<'a> {
+    pub fn new(
+        st: &'a mut TypeCheckerState,
+        env: &'a Environment,
+        env_bindings: &'a HashMap<String, Expr>,
+        initial_target: Expr,
+    ) -> Self {
+        let mut engine = TacticEngine {
+            st,
+            env,
+            env_bindings,
+            goals: Vec::new(),
+            next_mvar_idx: 0,
+            mvar_assignments: HashMap::new(),
+        };
+        engine.push_goal(initial_target);
+        engine
+    }
+
+    fn fresh_mvar_name(&mut self) -> Name {
+        let idx = self.next_mvar_idx;
+        self.next_mvar_idx += 1;
+        Name::new(&format!("_tactic_mvar_{}", idx))
+    }
+
+    fn push_goal(&mut self, target: Expr) -> Name {
+        let mvar = self.fresh_mvar_name();
+        self.goals.push(Goal {
+            lctx: LocalCtx::new(),
+            target,
+            mvar: mvar.clone(),
+        });
+        mvar
+    }
+
+    /// Current goal (last on stack)
+    pub fn current_goal(&self) -> Option<&Goal> {
+        self.goals.last()
+    }
+
+    pub fn current_goal_mut(&mut self) -> Option<&mut Goal> {
+        self.goals.last_mut()
+    }
+
+    /// Pop current goal, returning its mvar
+    pub fn pop_goal(&mut self) -> Option<Goal> {
+        self.goals.pop()
+    }
+
+    /// Number of remaining goals
+    pub fn num_goals(&self) -> usize {
+        self.goals.len()
+    }
+
+    /// Assign a metavariable to a value
+    pub fn assign_mvar(&mut self, name: &Name, val: Expr) {
+        self.mvar_assignments.insert(name.clone(), val);
+    }
+
+    /// Build the final proof term by substituting all MVar assignments
+    pub fn build_proof(&self, root: &Expr) -> Expr {
+        self.instantiate_mvars(root)
+    }
+
+    fn instantiate_mvars(&self, e: &Expr) -> Expr {
+        match e {
+            Expr::MVar(name) => {
+                if let Some(val) = self.mvar_assignments.get(name) {
+                    self.instantiate_mvars(val)
+                } else {
+                    e.clone()
+                }
+            }
+            Expr::App(f, a) => {
+                Expr::App(
+                    Rc::new(self.instantiate_mvars(f)),
+                    Rc::new(self.instantiate_mvars(a)),
+                )
+            }
+            Expr::Lambda(name, bi, ty, body) => {
+                Expr::Lambda(name.clone(), *bi, Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(body)))
+            }
+            Expr::Pi(name, bi, ty, body) => {
+                Expr::Pi(name.clone(), *bi, Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(body)))
+            }
+            Expr::Let(name, ty, val, body, nd) => {
+                Expr::Let(name.clone(), Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(val)), Rc::new(self.instantiate_mvars(body)), *nd)
+            }
+            Expr::Proj(name, idx, e) => {
+                Expr::Proj(name.clone(), *idx, Rc::new(self.instantiate_mvars(e)))
+            }
+            Expr::MData(md, e) => {
+                Expr::MData(md.clone(), Rc::new(self.instantiate_mvars(e)))
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Type-check an expression in the current goal's context
+    pub fn infer_in_goal(&mut self, e: &Expr) -> Result<Expr, String> {
+        if let Some(goal) = self.current_goal() {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+            tc.infer(e)
+        } else {
+            Err("No current goal".to_string())
+        }
+    }
+
+    /// Check definitional equality in the current goal's context
+    pub fn is_def_eq_in_goal(&mut self, t: &Expr, s: &Expr) -> bool {
+        if let Some(goal) = self.current_goal() {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+            tc.is_def_eq(t, s)
+        } else {
+            false
+        }
+    }
+
+    /// Introduce a variable from a Pi target
+    pub fn tactic_intro(&mut self, name: &str) -> Result<(), String> {
+        let goal = self.current_goal_mut().ok_or("No goals remaining")?;
+        let target = goal.target.clone();
+
+        // WHNF the target to expose Pi
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let target_whnf = tc.whnf(&target);
+
+        match &target_whnf {
+            Expr::Pi(_, _, dom, body) => {
+                let fvar_name = Name::new(name);
+                let fvar = Expr::mk_fvar(fvar_name.clone());
+                goal.lctx.mk_local_decl(fvar_name.clone(), Name::new(name), (**dom).clone(), BinderInfo::Default);
+
+                // New target is the body with the bound var replaced by FVar
+                goal.target = body.instantiate(&fvar);
+                Ok(())
+            }
+            _ => Err(format!("tactic_intro: target is not a Pi type: {}", format_expr(&target_whnf))),
+        }
+    }
+
+    /// Close current goal with exact proof term
+    pub fn tactic_exact(&mut self, proof: &Expr) -> Result<(), String> {
+        let goal = self.pop_goal().ok_or("No goals remaining")?;
+
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let proof_ty = tc.infer(proof).map_err(|e| format!("tactic_exact: type inference failed: {}", e))?;
+
+        if !tc.is_def_eq(&proof_ty, &goal.target) {
+            return Err(format!(
+                "tactic_exact: type mismatch. Expected {}, got {}",
+                format_expr(&goal.target),
+                format_expr(&proof_ty)
+            ));
+        }
+
+        // Build lambda abstraction over local context
+        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
+        let closed_proof = goal.lctx.mk_lambda(&fvars, proof.clone(), true);
+        self.assign_mvar(&goal.mvar, closed_proof);
+        Ok(())
+    }
+
+    /// Apply a theorem/lemma, generating subgoals for its premises
+    pub fn tactic_apply(&mut self, expr: &Expr) -> Result<(), String> {
+        let goal = self.current_goal().ok_or("No goals remaining")?;
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let expr_ty = tc.infer(expr).map_err(|e| format!("tactic_apply: {}", e))?;
+
+        // Collect premises and conclusion
+        let mut premises = Vec::new();
+        let mut conclusion = expr_ty.clone();
+        loop {
+            let c_whnf = tc.whnf(&conclusion);
+            match &c_whnf {
+                Expr::Pi(_, _, dom, body) => {
+                    premises.push((**dom).clone());
+                    let fresh = Expr::mk_fvar(Name::new("_fresh_apply"));
+                    conclusion = body.instantiate(&fresh);
+                }
+                _ => break,
+            }
+        }
+
+        // Check conclusion matches goal
+        if !tc.is_def_eq(&conclusion, &goal.target) {
+            return Err(format!(
+                "tactic_apply: conclusion {} does not match goal {}",
+                format_expr(&conclusion),
+                format_expr(&goal.target)
+            ));
+        }
+
+        // Pop the current goal
+        let goal = self.pop_goal().unwrap();
+
+        // Create subgoals for each premise (in reverse order so first premise is current)
+        let mut apply_args = Vec::new();
+        for premise in premises.iter().rev() {
+            let mvar = self.push_goal(premise.clone());
+            apply_args.push(Expr::mk_mvar(mvar));
+        }
+
+        // Build the application: expr arg1 arg2 ...
+        let mut applied = expr.clone();
+        for arg in apply_args.iter().rev() {
+            applied = Expr::mk_app(applied, arg.clone());
+        }
+
+        // Close over local context
+        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
+        let closed_proof = goal.lctx.mk_lambda(&fvars, applied, true);
+        self.assign_mvar(&goal.mvar, closed_proof);
+
+        Ok(())
+    }
+
+    /// Apply reflexivity: exact (refl _ _)
+    pub fn tactic_refl(&mut self) -> Result<(), String> {
+        let goal = self.current_goal().ok_or("No goals remaining")?;
+        let target = goal.target.clone();
+
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let target_whnf = tc.whnf(&target);
+
+        // Check if target is Eq A a a
+        let (eq_head, eq_args) = target_whnf.get_app_args();
+        let eq_const = eq_head.and_then(|h| h.const_name()).cloned();
+
+        if eq_const != Some(Name::new("Eq")) || eq_args.len() != 3 {
+            return Err(format!("tactic_refl: target is not an equality: {}", format_expr(&target_whnf)));
+        }
+
+        let a_type = &eq_args[0];
+        let a = &eq_args[1];
+        let b = &eq_args[2];
+
+        if !tc.is_def_eq(a, b) {
+            return Err(format!(
+                "tactic_refl: terms are not definitionally equal: {} vs {}",
+                format_expr(a),
+                format_expr(b)
+            ));
+        }
+
+        let refl = Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("refl"), vec![]), a_type.clone()), a.clone());
+        self.tactic_exact(&refl)
+    }
+
+    /// Try to solve current goal from assumptions in local context
+    pub fn tactic_assumption(&mut self) -> Result<(), String> {
+        let goal = self.current_goal().ok_or("No goals remaining")?;
+        let target = goal.target.clone();
+
+        for decl in goal.lctx.iter_decls() {
+            let fvar = decl.mk_ref();
+            if let Ok(ty) = self.infer_in_goal(&fvar) {
+                if self.is_def_eq_in_goal(&ty, &target) {
+                    return self.tactic_exact(&fvar);
+                }
+            }
+        }
+
+        Err("tactic_assumption: no matching assumption found".to_string())
+    }
+
+    /// Rewrite using an equality hypothesis
+    pub fn tactic_rewrite(&mut self, hyp_expr: &Expr) -> Result<(), String> {
+        let goal = self.current_goal().ok_or("No goals remaining")?;
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+
+        // Infer type of hypothesis
+        let hyp_ty = tc.infer(hyp_expr).map_err(|e| format!("tactic_rewrite: {}", e))?;
+        let hyp_whnf = tc.whnf(&hyp_ty);
+
+        // Expect Eq A a b
+        let (eq_head, eq_args) = hyp_whnf.get_app_args();
+        let eq_const = eq_head.and_then(|h| h.const_name()).cloned();
+        if eq_const != Some(Name::new("Eq")) || eq_args.len() != 3 {
+            return Err(format!("tactic_rewrite: hypothesis is not an equality: {}", format_expr(&hyp_whnf)));
+        }
+
+        let a_type = eq_args[0].clone();
+        let a = eq_args[1].clone();
+        let b = eq_args[2].clone();
+
+        // Pop current goal
+        let goal = self.pop_goal().unwrap();
+        let target = goal.target.clone();
+
+        // Create a new goal: target with a replaced by b
+        let new_target = replace_expr(&target, &a, &b);
+        let new_mvar = self.push_goal(new_target.clone());
+
+        // Build eq_subst A a b (fun x => target[x/a]) hyp_expr ?new_goal
+        let motive_body = replace_expr(&target, &a, &Expr::mk_bvar(0));
+        let motive = Expr::Lambda(Name::new("x"), BinderInfo::Default, Rc::new(a_type.clone()), Rc::new(motive_body));
+
+        let eq_subst = Expr::mk_const(Name::new("eq_subst"), vec![]);
+        let proof = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(Expr::mk_app(eq_subst, a_type), a.clone()), b.clone()), motive),
+            Expr::mk_app(hyp_expr.clone(), Expr::mk_mvar(new_mvar)),
+        );
+
+        // Wait, eq_subst is: eq_subst A a b P h pa : P b
+        // where h : Eq A a b, pa : P a
+        // We need: eq_subst A a b (fun x => target) hyp_expr ?m : target[b/a]
+        // But our replace_expr already did the replacement, so:
+        let proof = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(Expr::mk_app(
+                Expr::mk_const(Name::new("eq_subst"), vec![]),
+                a_type.clone()),
+                a.clone()),
+                b.clone()),
+                motive.clone()),
+            hyp_expr.clone(),
+        );
+        let proof = Expr::mk_app(proof, Expr::mk_mvar(new_mvar));
+
+        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
+        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
+        self.assign_mvar(&goal.mvar, closed_proof);
+
+        Ok(())
+    }
+}
+
+/// Replace all occurrences of `old` with `new` in `e`
+fn replace_expr(e: &Expr, old: &Expr, new: &Expr) -> Expr {
+    if e == old {
+        return new.clone();
+    }
+    match e {
+        Expr::App(f, a) => {
+            Expr::App(Rc::new(replace_expr(f, old, new)), Rc::new(replace_expr(a, old, new)))
+        }
+        Expr::Lambda(name, bi, ty, body) => {
+            Expr::Lambda(name.clone(), *bi, Rc::new(replace_expr(ty, old, new)), Rc::new(replace_expr(body, old, new)))
+        }
+        Expr::Pi(name, bi, ty, body) => {
+            Expr::Pi(name.clone(), *bi, Rc::new(replace_expr(ty, old, new)), Rc::new(replace_expr(body, old, new)))
+        }
+        Expr::Let(name, ty, val, body, nd) => {
+            Expr::Let(name.clone(), Rc::new(replace_expr(ty, old, new)), Rc::new(replace_expr(val, old, new)), Rc::new(replace_expr(body, old, new)), *nd)
+        }
+        Expr::Proj(name, idx, e) => {
+            Expr::Proj(name.clone(), *idx, Rc::new(replace_expr(e, old, new)))
+        }
+        Expr::MData(md, e) => {
+            Expr::MData(md.clone(), Rc::new(replace_expr(e, old, new)))
+        }
+        other => other.clone(),
+    }
+}
+
+/// Simple formatter for error messages
+fn format_expr(e: &Expr) -> String {
+    match e {
+        Expr::Const(name, _) => name.to_string(),
+        Expr::App(_, _) => {
+            let (head, args) = e.get_app_args();
+            let head_str = head.map(|h| format_expr(h)).unwrap_or_else(|| "?".to_string());
+            let args_str: Vec<String> = args.iter().map(|a| format_expr(a)).collect();
+            format!("{}({})", head_str, args_str.join(", "))
+        }
+        Expr::Lambda(_, _, ty, body) => format!("fun _ : {} => {}", format_expr(ty), format_expr(body)),
+        Expr::Pi(_, _, ty, body) => format!("(_ : {}) -> {}", format_expr(ty), format_expr(body)),
+        Expr::BVar(n) => format!("x{}", n),
+        Expr::FVar(name) => name.to_string(),
+        Expr::MVar(name) => format!("?{}", name.to_string()),
+        Expr::Sort(l) => format!("Sort({:?})", l),
+        _ => format!("{:?}", e),
+    }
+}

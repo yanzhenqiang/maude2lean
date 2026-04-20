@@ -29,6 +29,8 @@ pub enum ParsedExpr {
     NatLit(u64),
     /// match scrutinee : motive with | pat1 => e1 | pat2 x => e2
     Match(Box<ParsedExpr>, Box<ParsedExpr>, Vec<(ParsedExpr, ParsedExpr)>),
+    /// by tactic1; tactic2; ...
+    TacticBlock(Vec<String>),
 }
 
 impl ParsedExpr {
@@ -95,6 +97,9 @@ impl ParsedExpr {
             ParsedExpr::NatLit(n) => Expr::Lit(Literal::Nat(*n)),
             ParsedExpr::Match(scrutinee, motive, branches) => {
                 self.desugar_match(scrutinee, motive, branches, env_bindings, env, bound_vars)
+            }
+            ParsedExpr::TacticBlock(_) => {
+                panic!("TacticBlock should be handled by the REPL, not converted directly to Expr")
             }
         }
     }
@@ -622,6 +627,11 @@ impl Parser {
     fn parse_pi_or_arrow(&mut self) -> Result<ParsedExpr, String> {
         self.skip_whitespace();
 
+        // Check for tactic block: by tactic1; tactic2; ...
+        if self.starts_with_keyword("by") {
+            return self.parse_tactic_block();
+        }
+
         // Check for dependent pi: (x : A) -> B
         if self.peek() == Some('(') {
             let saved_pos = self.pos;
@@ -666,6 +676,88 @@ impl Parser {
         }
 
         Ok(left)
+    }
+
+    /// Parse a tactic block: by tactic1; tactic2; ...
+    fn parse_tactic_block(&mut self) -> Result<ParsedExpr, String> {
+        self.advance_by(2); // consume "by"
+        self.skip_whitespace();
+
+        let mut tactics = Vec::new();
+        loop {
+            self.skip_whitespace_and_comments();
+
+            // Check if we've reached a keyword that ends the tactic block
+            if self.peek().is_none()
+                || self.starts_with_keyword("def")
+                || self.starts_with_keyword("theorem")
+                || self.starts_with_keyword("inductive")
+                || self.starts_with_keyword("structure")
+                || self.starts_with_keyword("axiom")
+            {
+                break;
+            }
+
+            // Parse a single tactic command (everything until ';' or block end)
+            let mut tactic_str = String::new();
+            let mut paren_depth = 0;
+            loop {
+                self.skip_whitespace();
+                if self.peek().is_none() {
+                    break;
+                }
+
+                // Check for tactic-ending keywords
+                if paren_depth == 0
+                    && (self.starts_with_keyword("def")
+                        || self.starts_with_keyword("theorem")
+                        || self.starts_with_keyword("inductive")
+                        || self.starts_with_keyword("structure")
+                        || self.starts_with_keyword("axiom"))
+                {
+                    break;
+                }
+
+                let c = self.peek().unwrap();
+                if c == '(' {
+                    paren_depth += 1;
+                } else if c == ')' {
+                    if paren_depth == 0 {
+                        break;
+                    }
+                    paren_depth -= 1;
+                } else if c == ';' && paren_depth == 0 {
+                    self.advance(); // consume ';'
+                    break;
+                }
+
+                tactic_str.push(c);
+                self.advance();
+            }
+
+            let tactic_str = tactic_str.trim().to_string();
+            if !tactic_str.is_empty() {
+                tactics.push(tactic_str);
+            }
+
+            // If we hit a keyword or EOF without ';', stop
+            if self.peek().is_none()
+                || (paren_depth == 0
+                    && (self.starts_with_keyword("def")
+                        || self.starts_with_keyword("theorem")
+                        || self.starts_with_keyword("inductive")
+                        || self.starts_with_keyword("structure")
+                        || self.starts_with_keyword("axiom")))
+            {
+                break;
+            }
+        }
+
+        if tactics.is_empty() {
+            return Err("Empty tactic block".to_string());
+        }
+
+        Ok(ParsedExpr::TacticBlock(tactics))
     }
 
     /// Parse infix operators (+, -, *) with precedence climbing.

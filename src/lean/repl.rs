@@ -1,7 +1,8 @@
 use super::declaration::*;
 use super::environment::Environment;
 use super::expr::*;
-use super::repl_parser::{ParsedDecl, Parser as ReplParser};
+use super::repl_parser::{ParsedDecl, ParsedExpr, Parser as ReplParser};
+use super::tactic::TacticEngine;
 use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
 use std::fs;
@@ -372,8 +373,34 @@ impl Repl {
             bound_vars.push(pname.clone());
         }
 
-        // Convert value with parameters in bound_vars
-        let value_expr = value.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+        // Handle tactic block
+        let value_expr = match &value {
+            ParsedExpr::TacticBlock(tactics) => {
+                if !is_theorem {
+                    return Err("Tactic blocks are only allowed in theorems".to_string());
+                }
+                let target = ret_ty.as_ref().ok_or("Theorem with tactic block must have an explicit return type")?;
+                let mut target_expr = target.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+                // Wrap target with parameter types as Pi binders
+                for (pname, pty) in param_exprs.iter().rev() {
+                    target_expr = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(target_expr));
+                }
+
+                let mut engine = TacticEngine::new(&mut self.tc_state, &self.env, &self.env_bindings, target_expr);
+
+                for tactic_cmd in tactics {
+                    self.execute_tactic(&mut engine, tactic_cmd)?;
+                }
+
+                if engine.num_goals() > 0 {
+                    return Err(format!("Unsolved goals remaining: {}", engine.num_goals()));
+                }
+
+                let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
+                engine.build_proof(&root_mvar)
+            }
+            _ => value.to_expr(&self.env_bindings, &self.env, &mut bound_vars),
+        };
 
         // Embed params into value as lambdas
         let mut final_value = value_expr;
@@ -433,6 +460,60 @@ impl Repl {
             println!("  Added definition: {}", name);
         }
         Ok(())
+    }
+
+    fn execute_tactic(&self, engine: &mut TacticEngine, cmd: &str) -> Result<(), String> {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            return Ok(());
+        }
+
+        let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
+        let tactic_name = parts[0];
+        let rest = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+        match tactic_name {
+            "intro" | "intros" => {
+                if rest.is_empty() {
+                    // Single anonymous intro
+                    engine.tactic_intro("_x")?;
+                } else {
+                    // Intro multiple names
+                    for name in rest.split_whitespace() {
+                        engine.tactic_intro(name)?;
+                    }
+                }
+                Ok(())
+            }
+            "exact" => {
+                if rest.is_empty() {
+                    return Err("exact requires an expression".to_string());
+                }
+                let expr = self.parse_and_convert(rest)?;
+                engine.tactic_exact(&expr)
+            }
+            "apply" => {
+                if rest.is_empty() {
+                    return Err("apply requires an expression".to_string());
+                }
+                let expr = self.parse_and_convert(rest)?;
+                engine.tactic_apply(&expr)
+            }
+            "refl" | "reflexivity" => {
+                engine.tactic_refl()
+            }
+            "assumption" => {
+                engine.tactic_assumption()
+            }
+            "rewrite" | "rw" => {
+                if rest.is_empty() {
+                    return Err("rewrite requires an equality hypothesis".to_string());
+                }
+                let expr = self.parse_and_convert(rest)?;
+                engine.tactic_rewrite(&expr)
+            }
+            _ => Err(format!("Unknown tactic: {}", tactic_name)),
+        }
     }
 
     fn handle_axiom(&mut self, rest: &str) -> Result<(), String> {

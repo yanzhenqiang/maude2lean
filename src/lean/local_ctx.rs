@@ -159,6 +159,16 @@ impl LocalCtx {
         self.decls.remove(decl.get_name());
     }
 
+    /// Iterate over all local declarations
+    pub fn iter_decls(&self) -> impl Iterator<Item = &LocalDecl> {
+        self.decls.values()
+    }
+
+    /// Get the number of local declarations
+    pub fn len(&self) -> usize {
+        self.decls.len()
+    }
+
     /// Create lambda expression from local declarations
     pub fn mk_lambda(&self, fvars: &[Expr], body: Expr, remove_dead_let: bool) -> Expr {
         let mut result = body;
