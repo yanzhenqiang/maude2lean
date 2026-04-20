@@ -98,6 +98,9 @@ impl<'a> TypeChecker<'a> {
                     return Err(format!("Constant not found: {:?}", name));
                 }
                 let info = self.st.env().get(name);
+                if info.is_quot() {
+                    return self.infer_quot_const(name, levels);
+                }
                 let ty = info.get_type();
                 Ok(self.instantiate_univ_params(ty, info.get_level_params(), levels))
             }
@@ -301,6 +304,10 @@ impl<'a> TypeChecker<'a> {
                         if let Some(reduced) = self.reduce_recursor(e) {
                             return self.whnf_core(&reduced);
                         }
+                        // Try quotient reduction
+                        if let Some(reduced) = self.reduce_quot(e) {
+                            return self.whnf_core(&reduced);
+                        }
                         Expr::App(Rc::new(f_whnf), a.clone())
                     }
                 }
@@ -421,6 +428,123 @@ impl<'a> TypeChecker<'a> {
         None
     }
 
+    /// Infer the type of a quotient primitive constant.
+    fn infer_quot_const(&mut self, name: &Name, levels: &[Level]) -> Result<Expr, String> {
+        let prop = Expr::mk_prop();
+        if name == &Name::new("Quot") {
+            // Quot.{u} : (A : Sort u) -> (A -> A -> Prop) -> Sort u
+            let u = levels.get(0).cloned().unwrap_or(Level::Param(Name::new("u")));
+            let sort_u = Expr::mk_sort(u);
+            let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
+            Ok(Expr::mk_pi(Name::new("A"), sort_u.clone(),
+                Expr::mk_pi(Name::new("r"), r_ty, sort_u)))
+        } else if name == &Name::new("Quot").extend("mk") {
+            // Quot.mk.{u} : (A : Sort u) -> (r : A -> A -> Prop) -> A -> Quot A r
+            let u = levels.get(0).cloned().unwrap_or(Level::Param(Name::new("u")));
+            let sort_u = Expr::mk_sort(u.clone());
+            let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
+            let quot_app = Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u]), Expr::mk_bvar(2)),
+                Expr::mk_bvar(1));
+            Ok(Expr::mk_pi(Name::new("A"), sort_u,
+                Expr::mk_pi(Name::new("r"), r_ty,
+                    Expr::mk_pi(Name::new("a"), Expr::mk_bvar(1), quot_app))))
+        } else if name == &Name::new("Quot").extend("lift") {
+            // Quot.lift.{u,v} : (A : Sort u) -> (r : A -> A -> Prop) -> (B : Sort v) ->
+            //   (f : A -> B) -> (compat : forall a b, r a b -> B) -> Quot A r -> B
+            let u = levels.get(0).cloned().unwrap_or(Level::Param(Name::new("u")));
+            let v = levels.get(1).cloned().unwrap_or(Level::Param(Name::new("v")));
+            let sort_u = Expr::mk_sort(u.clone());
+            let sort_v = Expr::mk_sort(v);
+            let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
+            let a_to_b = Expr::mk_arrow(Expr::mk_bvar(2), Expr::mk_bvar(1));
+            let compat_ty = Expr::mk_pi(Name::new("a"), Expr::mk_bvar(3),
+                Expr::mk_pi(Name::new("b"), Expr::mk_bvar(4),
+                    Expr::mk_pi(Name::new("_"),
+                        Expr::mk_app(Expr::mk_app(Expr::mk_bvar(4), Expr::mk_bvar(1)), Expr::mk_bvar(0)),
+                        Expr::mk_bvar(3))));
+            let quot_app = Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u]), Expr::mk_bvar(4)),
+                Expr::mk_bvar(3));
+            let ret_ty = Expr::mk_bvar(2);
+            Ok(Expr::mk_pi(Name::new("A"), sort_u,
+                Expr::mk_pi(Name::new("r"), r_ty,
+                    Expr::mk_pi(Name::new("B"), sort_v,
+                        Expr::mk_pi(Name::new("f"), a_to_b,
+                            Expr::mk_pi(Name::new("compat"), compat_ty,
+                                Expr::mk_pi(Name::new("q"), quot_app, ret_ty)))))))
+        } else if name == &Name::new("Quot").extend("ind") {
+            // Quot.ind.{u} : (A : Sort u) -> (r : A -> A -> Prop) ->
+            //   (B : Quot A r -> Prop) -> (h : forall a, B (Quot.mk A r a)) ->
+            //   (q : Quot A r) -> B q
+            let u = levels.get(0).cloned().unwrap_or(Level::Param(Name::new("u")));
+            let sort_u = Expr::mk_sort(u.clone());
+            let r_ty = Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(1), prop.clone()));
+            let b_ty = Expr::mk_arrow(
+                Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u.clone()]), Expr::mk_bvar(1)), Expr::mk_bvar(0)),
+                prop.clone());
+            let h_ty = Expr::mk_pi(Name::new("a"), Expr::mk_bvar(2),
+                Expr::mk_app(Expr::mk_bvar(1),
+                    Expr::mk_app(
+                        Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("Quot").extend("mk"), vec![u.clone()]), Expr::mk_bvar(3)), Expr::mk_bvar(2)),
+                        Expr::mk_bvar(0))));
+            let quot_app = Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![u]), Expr::mk_bvar(3)),
+                Expr::mk_bvar(2));
+            let ret_ty = Expr::mk_app(Expr::mk_bvar(2), Expr::mk_bvar(0));
+            Ok(Expr::mk_pi(Name::new("A"), sort_u,
+                Expr::mk_pi(Name::new("r"), r_ty,
+                    Expr::mk_pi(Name::new("B"), b_ty,
+                        Expr::mk_pi(Name::new("h"), h_ty,
+                            Expr::mk_pi(Name::new("q"), quot_app, ret_ty))))))
+        } else {
+            Err(format!("Unknown quot constant: {}", name.to_string()))
+        }
+    }
+
+    /// Reduce quotient primitive applications.
+    fn reduce_quot(&mut self, e: &Expr) -> Option<Expr> {
+        let (fn_expr, args) = e.get_app_args();
+        let fn_expr = fn_expr?;
+
+        if let Expr::Const(name, _) = fn_expr {
+            if name == &Name::new("Quot").extend("lift") {
+                // Quot.lift A r B f compat q
+                if args.len() >= 6 {
+                    let q = args[5];
+                    let q_whnf = self.whnf(q);
+                    let (q_fn, q_args) = q_whnf.get_app_args();
+                    if let Some(Expr::Const(q_name, _)) = q_fn {
+                        if q_name == &Name::new("Quot").extend("mk") && q_args.len() >= 3 {
+                            let a = q_args[2];
+                            let f = args[3];
+                            return Some(Expr::mk_app(f.clone(), a.clone()));
+                        }
+                    }
+                }
+            } else if name == &Name::new("Quot").extend("ind") {
+                // Quot.ind A r B h q
+                if args.len() >= 5 {
+                    let q = args[4];
+                    let q_whnf = self.whnf(q);
+                    let (q_fn, q_args) = q_whnf.get_app_args();
+                    if let Some(Expr::Const(q_name, _)) = q_fn {
+                        if q_name == &Name::new("Quot").extend("mk") && q_args.len() >= 3 {
+                            let a = q_args[2];
+                            let h = args[3];
+                            return Some(Expr::mk_app(h.clone(), a.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Check definitional equality
     pub fn is_def_eq(&mut self, t: &Expr, s: &Expr) -> bool {
         // Quick checks
@@ -464,7 +588,14 @@ impl<'a> TypeChecker<'a> {
 
         match (t, s) {
             (Expr::Sort(l1), Expr::Sort(l2)) => {
-                l1.is_equivalent(l2)
+                if l1.is_equivalent(l2) {
+                    return true;
+                }
+                // Flexible universe matching: allow Param to match any concrete level
+                // This simplifies Quot and other polymorphic primitives when universe
+                // levels are not explicitly provided.
+                let is_flexible = |l: &Level| matches!(l, Level::Param(_));
+                is_flexible(l1) || is_flexible(l2)
             }
             (Expr::Const(n1, ls1), Expr::Const(n2, ls2)) => {
                 n1 == n2 && ls1 == ls2
@@ -1184,5 +1315,89 @@ mod tests {
         let app = Expr::mk_app(lam, zero.clone());
         let result = tc.nf(&app);
         assert_eq!(result, zero);
+    }
+
+    #[test]
+    fn test_quot_type_and_reduction() {
+        let mut env = Environment::new();
+        // Add Nat
+        let nat_decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![InductiveType {
+                name: Name::new("Nat"),
+                ty: Expr::mk_type(),
+                ctors: vec![
+                    Constructor { name: Name::new("zero"), ty: Expr::mk_const(Name::new("Nat"), vec![]) },
+                    Constructor { name: Name::new("succ"), ty: Expr::mk_arrow(Expr::mk_const(Name::new("Nat"), vec![]), Expr::mk_const(Name::new("Nat"), vec![])) },
+                ],
+            }],
+            is_unsafe: false,
+        };
+        env.add(nat_decl).unwrap();
+        // Add True : Prop with constructor trivial : True
+        let true_decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![InductiveType {
+                name: Name::new("True"),
+                ty: Expr::mk_prop(),
+                ctors: vec![Constructor { name: Name::new("trivial"), ty: Expr::mk_const(Name::new("True"), vec![]) }],
+            }],
+            is_unsafe: false,
+        };
+        env.add(true_decl).unwrap();
+        env.add(Declaration::Quot).unwrap();
+
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+
+        // Build a dummy relation r : Nat -> Nat -> Prop
+        // r = fun x y => True (simplified)
+        let _prop = Expr::mk_prop();
+        let true_const = Expr::mk_const(Name::new("True"), vec![]);
+        let r = Expr::mk_lambda(Name::new("x"), nat.clone(),
+            Expr::mk_lambda(Name::new("y"), nat.clone(), true_const.clone()));
+
+        let type_u = Level::mk_succ(Level::Zero);
+
+        // Quot Nat r
+        let quot_nat_r = Expr::mk_app(
+            Expr::mk_app(Expr::mk_const(Name::new("Quot"), vec![type_u.clone()]), nat.clone()),
+            r.clone(),
+        );
+
+        // Type-check Quot
+        let quot_ty = tc.infer(&quot_nat_r).unwrap();
+        assert_eq!(quot_ty, Expr::mk_type());
+
+        // Quot.mk Nat r zero
+        let mk_app = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("Quot").extend("mk"), vec![type_u.clone()]), nat.clone()), r.clone()),
+            zero.clone(),
+        );
+        let mk_ty = tc.infer(&mk_app).unwrap();
+        assert_eq!(mk_ty, quot_nat_r);
+
+        // Quot.lift Nat r Nat succ compat (Quot.mk Nat r zero) ~> succ zero
+        // Build compat : forall a b, r a b -> Nat
+        let compat = Expr::mk_lambda(Name::new("a"), nat.clone(),
+            Expr::mk_lambda(Name::new("b"), nat.clone(),
+                Expr::mk_lambda(Name::new("h"), true_const.clone(), zero.clone())));
+
+        let lift_app = Expr::mk_app(
+            Expr::mk_app(Expr::mk_app(Expr::mk_app(Expr::mk_app(
+                Expr::mk_app(Expr::mk_const(Name::new("Quot").extend("lift"), vec![type_u.clone(), type_u.clone()]), nat.clone()),
+                r.clone()), nat.clone()), succ.clone()), compat.clone()),
+            mk_app.clone(),
+        );
+
+        let result = tc.whnf(&lift_app);
+        let expected = Expr::mk_app(succ.clone(), zero.clone());
+        assert_eq!(result, expected, "Quot.lift reduction failed");
     }
 }

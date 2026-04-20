@@ -44,6 +44,7 @@ impl Repl {
         };
         repl.load_nat();
         repl.load_exists();
+        repl.load_quot();
         repl
     }
 
@@ -656,6 +657,15 @@ impl Repl {
         self.env_bindings.insert("Exists".to_string(), Expr::mk_const(Name::new("Exists"), vec![]));
         self.env_bindings.insert("intro".to_string(), Expr::mk_const(Name::new("intro"), vec![]));
         self.env_bindings.insert("rec.Exists".to_string(), Expr::mk_const(Name::new("rec").extend("Exists"), vec![]));
+    }
+
+    fn load_quot(&mut self) {
+        let _ = self.env.add(Declaration::Quot);
+        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.env_bindings.insert("Quot".to_string(), Expr::mk_const(Name::new("Quot"), vec![]));
+        self.env_bindings.insert("Quot.mk".to_string(), Expr::mk_const(Name::new("Quot").extend("mk"), vec![]));
+        self.env_bindings.insert("Quot.lift".to_string(), Expr::mk_const(Name::new("Quot").extend("lift"), vec![]));
+        self.env_bindings.insert("Quot.ind".to_string(), Expr::mk_const(Name::new("Quot").extend("ind"), vec![]));
     }
 }
 

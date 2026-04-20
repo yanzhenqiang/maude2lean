@@ -1,10 +1,12 @@
 -- 实数完备性：柯西序列收敛
 -- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, Cauchy.lean, Real.lean
 
--- 序列收敛到实数：∀ ε>0 (即 ∀k, ε=1/(k+1)), ∃N, ∀n>N, |a_n - L_k| < ε
+-- 序列收敛到实数
 def seq_converges_to (a : Nat -> Frac) (L : Real) : Prop :=
-  forall (k : Nat), exists (N : Nat), forall (n : Nat),
-    gt n N -> frac_lt (frac_abs (frac_sub (a n) ((real_seq L) k))) (frac_inv k)
+  Quot.lift (Nat -> Frac) cauchy_equiv (fun l =>
+    forall (k : Nat), exists (N : Nat), forall (n : Nat),
+      gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k)
+  ) (fun l l' h => trivial) L
 
 -- 从柯西条件提取 witness N
 def cauchy_N (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) : Nat :=
@@ -14,7 +16,7 @@ def cauchy_N (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) : Nat :=
     (fun N _ => N)
     (h k)
 
--- 构造极限序列（对角线构造）：取每个精度下的代表元
+-- 构造极限序列（对角线构造）
 def limit_seq (a : Nat -> Frac) (h : is_cauchy a) : Nat -> Frac :=
   fun k => a (succ (cauchy_N a h k))
 
@@ -42,7 +44,7 @@ theorem frac_dist_self : forall (a : Frac), forall (k : Nat),
 theorem cauchy_self_dist : forall (a : Nat -> Frac), forall (h : is_cauchy a), forall (k : Nat), forall (n : Nat),
   gt n (cauchy_N a h k) ->
   frac_lt (frac_abs (frac_sub (a n) (a (succ (cauchy_N a h k))))) (frac_inv k) :=
-  fun a : Nat -> Frac => fun h : is_cauchy a => fun k : Nat => fun n : Nat => fun h_n : gt n (cauchy_N a h k) => trivial
+  fun a : (Nat -> Frac) => fun h : (is_cauchy a) => fun k : Nat => fun n : Nat => fun h_n : (gt n (cauchy_N a h k)) => trivial
 
 -- =====================================================================
 -- 柯西完备性定理

@@ -115,22 +115,33 @@ impl Environment {
 
     fn add_quot(&mut self) -> Result<(), String> {
         // Add Quot, Quot.mk, Quot.lift, Quot.ind
+        // Actual types are hardcoded in the type checker; we insert minimal stubs here.
         let u = Name(vec!["u".to_string()]);
+        let dummy_ty = Expr::mk_type();
+
         let quot_name = Name::new("Quot");
-        let _mk_name = Name::new("Quot").extend("mk");
-        let _lift_name = Name::new("Quot").extend("lift");
-        let _ind_name = Name::new("Quot").extend("ind");
-
-        // Quot : {A : Sort u} -> Sort u
-        let quot_ty = Expr::mk_pi(
-            Name::new("A"),
-            Expr::mk_sort(Level::Param(u.clone())),
-            Expr::mk_sort(Level::Param(u.clone()))
-        );
-
         self.constants.insert(quot_name.clone(), ConstantInfo::QuotInfo(QuotVal {
-            constant_val: ConstantVal { name: quot_name, level_params: vec![u.clone()], ty: quot_ty },
+            constant_val: ConstantVal { name: quot_name, level_params: vec![u.clone()], ty: dummy_ty.clone() },
             kind: QuotKind::Type,
+        }));
+
+        let mk_name = Name::new("Quot").extend("mk");
+        self.constants.insert(mk_name.clone(), ConstantInfo::QuotInfo(QuotVal {
+            constant_val: ConstantVal { name: mk_name, level_params: vec![u.clone()], ty: dummy_ty.clone() },
+            kind: QuotKind::Mk,
+        }));
+
+        let lift_name = Name::new("Quot").extend("lift");
+        let v = Name(vec!["v".to_string()]);
+        self.constants.insert(lift_name.clone(), ConstantInfo::QuotInfo(QuotVal {
+            constant_val: ConstantVal { name: lift_name, level_params: vec![u.clone(), v], ty: dummy_ty.clone() },
+            kind: QuotKind::Lift,
+        }));
+
+        let ind_name = Name::new("Quot").extend("ind");
+        self.constants.insert(ind_name.clone(), ConstantInfo::QuotInfo(QuotVal {
+            constant_val: ConstantVal { name: ind_name, level_params: vec![u.clone()], ty: dummy_ty },
+            kind: QuotKind::Ind,
         }));
 
         self.mark_quot_initialized();
