@@ -257,7 +257,7 @@ impl Environment {
             }
 
             // Generate recursor type (simplified but structurally sound)
-            let rec_ty = Self::mk_recursor_type(
+            let (rec_ty, rec_u) = Self::mk_recursor_type(
                 &ind_type.name,
                 &ind_type.ty,
                 num_params,
@@ -265,10 +265,13 @@ impl Environment {
                 &ind_type.ctors,
             );
 
+            let mut rec_level_params = level_params.clone();
+            rec_level_params.push(rec_u);
+
             let rec_val = RecursorVal {
                 constant_val: ConstantVal {
                     name: rec_name.clone(),
-                    level_params: level_params.clone(),
+                    level_params: rec_level_params,
                     ty: rec_ty,
                 },
                 all: all_names.clone(),
@@ -628,7 +631,7 @@ impl Environment {
         num_params: u64,
         num_indices: u64,
         ctors: &[Constructor],
-    ) -> Expr {
+    ) -> (Expr, Name) {
         let num_minors = ctors.len() as u64;
         let u = Name::new("u");
         let u_level = Level::Param(u.clone());
@@ -681,22 +684,21 @@ impl Environment {
             result = Expr::mk_pi(name.clone(), ty.clone(), result);
         }
 
-        result
+        (result, u)
     }
 
     /// Build the motive type: forall indices, I params indices -> Sort u
-    /// For simplicity, we use Type (Sort 1) as the motive return sort.
     fn mk_motive_type(
         ind_name: &Name,
         ind_ty: &Expr,
         num_params: u64,
         num_indices: u64,
-        _u_level: Level,
+        u_level: Level,
     ) -> Expr {
         // In P's domain, params are the innermost binders (start at BVar 0),
         // and indices come after params.
         let ind_app = Self::mk_inductive_app(ind_name, num_params, num_indices, 0);
-        let mut result = Expr::mk_arrow(ind_app, Expr::mk_type());
+        let mut result = Expr::mk_arrow(ind_app, Expr::mk_sort(u_level));
         // Quantify over indices (from last to first so i0 is outermost)
         let index_types = Self::extract_index_types(ind_ty, num_params, num_indices);
         for (name, ty) in index_types.iter().rev() {

@@ -21,21 +21,22 @@ def int_to_frac (n : Int) : Frac := mk n zero
 def nat_to_frac (n : Nat) : Frac := mk (ofNat n) zero
 
 -- 分数加法: n1/d1 + n2/d2 = (n1*d2 + n2*d1) / (d1*d2)
+-- mk num den 表示 num/(den+1)，所以分母应为 (d1+1)*(d2+1) - 1
 def frac_add (f1 : Frac) (f2 : Frac) : Frac :=
   mk (int_add (int_mul (frac_num f1) (ofNat (frac_den1 f2)))
               (int_mul (frac_num f2) (ofNat (frac_den1 f1))))
-     (nat_mul (frac_den1 f1) (frac_den1 f2))
+     (nat_sub (nat_mul (frac_den1 f1) (frac_den1 f2)) (succ zero))
 
 -- 分数减法
 def frac_sub (f1 : Frac) (f2 : Frac) : Frac :=
   mk (int_sub (int_mul (frac_num f1) (ofNat (frac_den1 f2)))
               (int_mul (frac_num f2) (ofNat (frac_den1 f1))))
-     (nat_mul (frac_den1 f1) (frac_den1 f2))
+     (nat_sub (nat_mul (frac_den1 f1) (frac_den1 f2)) (succ zero))
 
 -- 分数乘法
 def frac_mul (f1 : Frac) (f2 : Frac) : Frac :=
   mk (int_mul (frac_num f1) (frac_num f2))
-     (nat_mul (frac_den1 f1) (frac_den1 f2))
+     (nat_sub (nat_mul (frac_den1 f1) (frac_den1 f2)) (succ zero))
 
 -- 分数绝对值
 def frac_abs (f : Frac) : Frac :=

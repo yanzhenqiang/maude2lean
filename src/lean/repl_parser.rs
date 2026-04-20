@@ -274,6 +274,12 @@ pub enum ParsedDecl {
         name: String,
         ty: ParsedExpr,
     },
+    /// Structure declaration: desugars to inductive + projections
+    Structure {
+        name: String,
+        ty: ParsedExpr,
+        fields: Vec<(String, ParsedExpr)>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -358,6 +364,8 @@ impl Parser {
             self.parse_theorem_decl()
         } else if self.starts_with_keyword("inductive") {
             self.parse_inductive_decl()
+        } else if self.starts_with_keyword("structure") {
+            self.parse_structure_decl()
         } else if self.starts_with_keyword("axiom") {
             self.parse_axiom_decl()
         } else {
@@ -530,6 +538,58 @@ impl Parser {
         Ok(ParsedDecl::Inductive { name, ty: final_ty, ctors: final_ctors, num_params: params.len() })
     }
 
+    fn parse_structure_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(9); // consume "structure"
+        self.skip_whitespace();
+        let name = self.parse_ident_raw()?;
+        self.skip_whitespace();
+
+        // Optional parent type (ignored for now)
+        let ty = if self.peek() == Some(':') {
+            self.advance();
+            self.parse_pi_or_arrow()?
+        } else {
+            ParsedExpr::Sort(1) // default to Type
+        };
+
+        self.skip_whitespace();
+        if self.peek() != Some(':') || self.input.get(self.pos + 1) != Some(&'=') {
+            return Err("Expected ':=/' after structure name".to_string());
+        }
+        self.advance_by(2); // consume ":="
+        self.skip_whitespace();
+
+        // Parse fields: (field_name : field_type)
+        let mut fields = Vec::new();
+        loop {
+            self.skip_whitespace_and_comments();
+            if self.peek() != Some('(') {
+                break;
+            }
+            self.advance(); // consume '('
+            self.skip_whitespace();
+            let fname = self.parse_ident_raw()?;
+            self.skip_whitespace();
+            if self.peek() != Some(':') {
+                return Err("Expected ':' in structure field".to_string());
+            }
+            self.advance();
+            let fty = self.parse_pi_or_arrow()?;
+            self.skip_whitespace();
+            if self.peek() != Some(')') {
+                return Err("Expected ')' after field".to_string());
+            }
+            self.advance(); // consume ')'
+            fields.push((fname, fty));
+        }
+
+        if fields.is_empty() {
+            return Err("Structure must have at least one field".to_string());
+        }
+
+        Ok(ParsedDecl::Structure { name, ty, fields })
+    }
+
     fn peek(&self) -> Option<char> {
         self.input.get(self.pos).copied()
     }
@@ -579,6 +639,10 @@ impl Parser {
 
                     if self.peek() == Some('-') && self.input.get(self.pos + 1) == Some(&'>') {
                         self.advance();
+                        self.advance();
+                        let body = self.parse_pi_or_arrow()?;
+                        return Ok(ParsedExpr::Pi(name, Box::new(ty), Box::new(body)));
+                    } else if self.peek() == Some(',') {
                         self.advance();
                         let body = self.parse_pi_or_arrow()?;
                         return Ok(ParsedExpr::Pi(name, Box::new(ty), Box::new(body)));
@@ -669,7 +733,7 @@ impl Parser {
             // Keywords that end the application chain
             if self.starts_with_keyword("in") || self.starts_with_keyword("with") || self.starts_with_keyword("where")
                 || self.starts_with_keyword("def") || self.starts_with_keyword("theorem")
-                || self.starts_with_keyword("inductive") || self.starts_with_keyword("axiom")
+                || self.starts_with_keyword("inductive") || self.starts_with_keyword("structure") || self.starts_with_keyword("axiom")
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module") {
                 break;
             }

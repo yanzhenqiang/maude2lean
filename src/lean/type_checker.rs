@@ -10,13 +10,17 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ExprPair(Expr, Expr);
 
-/// Type checker state (caches, etc.)
+/// Type checker state (caches, metavariable assignments, etc.)
 #[derive(Debug, Clone)]
 pub struct TypeCheckerState {
     env: Environment,
     infer_cache: HashMap<Expr, Expr>,
     whnf_cache: HashMap<Expr, Expr>,
     failure_cache: HashMap<ExprPair, bool>,
+    /// Metavariable assignments: ?m -> value
+    mvar_assignments: HashMap<Name, Expr>,
+    /// Universe level parameter substitutions: u -> level
+    level_subst: HashMap<Name, Level>,
 }
 
 impl TypeCheckerState {
@@ -26,11 +30,59 @@ impl TypeCheckerState {
             infer_cache: HashMap::new(),
             whnf_cache: HashMap::new(),
             failure_cache: HashMap::new(),
+            mvar_assignments: HashMap::new(),
+            level_subst: HashMap::new(),
         }
     }
 
     pub fn env(&self) -> &Environment {
         &self.env
+    }
+
+    pub fn get_mvar_assignment(&self, name: &Name) -> Option<&Expr> {
+        self.mvar_assignments.get(name)
+    }
+
+    pub fn assign_mvar(&mut self, name: &Name, val: Expr) -> bool {
+        // Occur check: the metavariable must not occur in its assigned value
+        if val.has_mvar_named(name) {
+            return false;
+        }
+        self.mvar_assignments.insert(name.clone(), val);
+        true
+    }
+
+    pub fn clear_mvar_assignments(&mut self) {
+        self.mvar_assignments.clear();
+    }
+
+    pub fn get_level_subst(&self, name: &Name) -> Option<&Level> {
+        self.level_subst.get(name)
+    }
+
+    pub fn assign_level_param(&mut self, name: &Name, level: Level) -> bool {
+        // Occur check for level params: avoid cyclic substitutions
+        if Self::level_contains_param(&level, name) {
+            return false;
+        }
+        self.level_subst.insert(name.clone(), level);
+        true
+    }
+
+    pub fn clear_level_subst(&mut self) {
+        self.level_subst.clear();
+    }
+
+    fn level_contains_param(level: &Level, name: &Name) -> bool {
+        match level {
+            Level::Param(n) => n == name,
+            Level::MVar(n) => n == name,
+            Level::Succ(l) => Self::level_contains_param(l, name),
+            Level::Max(l1, l2) | Level::IMax(l1, l2) => {
+                Self::level_contains_param(l1, name) || Self::level_contains_param(l2, name)
+            }
+            Level::Zero => false,
+        }
     }
 }
 
@@ -88,7 +140,11 @@ impl<'a> TypeChecker<'a> {
                     .ok_or_else(|| format!("Unknown free variable {}", name.to_string()))
             }
             Expr::MVar(name) => {
-                Err(format!("Unexpected metavariable {}", name.to_string()))
+                if let Some(val) = self.st.get_mvar_assignment(name).cloned() {
+                    self.infer_type(&val)
+                } else {
+                    Err(format!("Unassigned metavariable {}", name.to_string()))
+                }
             }
             Expr::Sort(level) => {
                 Ok(Expr::Sort(Level::mk_succ(level.clone())))
@@ -265,8 +321,15 @@ impl<'a> TypeChecker<'a> {
 
     fn whnf_core(&mut self, e: &Expr) -> Expr {
         match e {
-            Expr::BVar(_) | Expr::Sort(_) | Expr::MVar(_) | Expr::Pi(_, _, _, _) => {
+            Expr::BVar(_) | Expr::Sort(_) | Expr::Pi(_, _, _, _) => {
                 e.clone()
+            }
+            Expr::MVar(name) => {
+                if let Some(val) = self.st.get_mvar_assignment(name).cloned() {
+                    self.whnf_core(&val)
+                } else {
+                    e.clone()
+                }
             }
             Expr::Lit(lit) => {
                 match lit {
@@ -594,6 +657,18 @@ impl<'a> TypeChecker<'a> {
         let t_n = self.whnf(t);
         let s_n = self.whnf(s);
 
+        // Metavariable unification
+        if let Expr::MVar(name) = &t_n {
+            if self.try_assign_mvar(name, &s_n) {
+                return true;
+            }
+        }
+        if let Expr::MVar(name) = &s_n {
+            if self.try_assign_mvar(name, &t_n) {
+                return true;
+            }
+        }
+
         // Try is_def_eq_core first
         let result = self.is_def_eq_core(&t_n, &s_n);
         if result {
@@ -621,14 +696,7 @@ impl<'a> TypeChecker<'a> {
 
         match (t, s) {
             (Expr::Sort(l1), Expr::Sort(l2)) => {
-                if l1.is_equivalent(l2) {
-                    return true;
-                }
-                // Flexible universe matching: allow Param to match any concrete level
-                // This simplifies Quot and other polymorphic primitives when universe
-                // levels are not explicitly provided.
-                let is_flexible = |l: &Level| matches!(l, Level::Param(_));
-                is_flexible(l1) || is_flexible(l2)
+                self.is_def_eq_levels(l1, l2)
             }
             (Expr::Const(n1, ls1), Expr::Const(n2, ls2)) => {
                 n1 == n2 && ls1 == ls2
@@ -663,6 +731,63 @@ impl<'a> TypeChecker<'a> {
                 }
                 false
             }
+        }
+    }
+
+    /// Try to assign a metavariable to a value.
+    /// Returns true if assignment succeeds or the metavariable is already assigned
+    /// to a definitionally equal value.
+    fn try_assign_mvar(&mut self, name: &Name, val: &Expr) -> bool {
+        // If already assigned, check definitional equality with assigned value
+        if let Some(assigned) = self.st.get_mvar_assignment(name).cloned() {
+            return self.is_def_eq(&assigned, val);
+        }
+        // Occur check: avoid cyclic assignments
+        if val.has_mvar_named(name) {
+            return false;
+        }
+        // Perform assignment
+        self.st.assign_mvar(name, val.clone())
+    }
+
+    /// Check if two universe levels are definitionally equal, using constraint solving for params.
+    fn is_def_eq_levels(&mut self, l1: &Level, l2: &Level) -> bool {
+        let n1 = l1.normalize();
+        let n2 = l2.normalize();
+        if n1.is_equivalent(&n2) {
+            return true;
+        }
+        // Try to unify level parameters
+        match (&n1, &n2) {
+            (Level::Param(p), _) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_def_eq_levels(&subst, &n2)
+                } else {
+                    self.st.assign_level_param(p, n2.clone())
+                }
+            }
+            (_, Level::Param(p)) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_def_eq_levels(&n1, &subst)
+                } else {
+                    self.st.assign_level_param(p, n1.clone())
+                }
+            }
+            (Level::MVar(p), _) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_def_eq_levels(&subst, &n2)
+                } else {
+                    self.st.assign_level_param(p, n2.clone())
+                }
+            }
+            (_, Level::MVar(p)) => {
+                if let Some(subst) = self.st.get_level_subst(p).cloned() {
+                    self.is_def_eq_levels(&n1, &subst)
+                } else {
+                    self.st.assign_level_param(p, n1.clone())
+                }
+            }
+            _ => false,
         }
     }
 
@@ -721,10 +846,14 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn instantiate_univ_params(&self, e: &Expr, params: &[Name], levels: &[Level]) -> Expr {
-        if params.is_empty() {
+        if params.is_empty() && self.st.level_subst.is_empty() {
             return e.clone();
         }
-        let subst: HashMap<Name, Level> = params.iter().cloned().zip(levels.iter().cloned()).collect();
+        let mut subst: HashMap<Name, Level> = params.iter().cloned().zip(levels.iter().cloned()).collect();
+        // Also include recorded level substitutions from constraint solving
+        for (name, level) in &self.st.level_subst {
+            subst.insert(name.clone(), level.clone());
+        }
         self.replace_levels(e, &subst)
     }
 
@@ -1432,5 +1561,101 @@ mod tests {
         let result = tc.whnf(&lift_app);
         let expected = Expr::mk_app(succ.clone(), zero.clone());
         assert_eq!(result, expected, "Quot.lift reduction failed");
+    }
+
+    #[test]
+    fn test_mvar_unification() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let mvar = Expr::mk_mvar(Name::new("m1"));
+
+        // ?m = zero should succeed
+        assert!(tc.is_def_eq(&mvar, &zero));
+        // After assignment, ?m should be defeq to zero
+        assert!(tc.is_def_eq(&mvar, &zero));
+        // And whnf should reduce ?m to zero
+        assert_eq!(tc.whnf(&mvar), zero);
+    }
+
+    #[test]
+    fn test_mvar_occur_check() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let mvar = Expr::mk_mvar(Name::new("m1"));
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+        // ?m = succ ?m should fail (cyclic)
+        let cyclic = Expr::mk_app(succ.clone(), mvar.clone());
+        assert!(!tc.is_def_eq(&mvar, &cyclic));
+    }
+
+    #[test]
+    fn test_mvar_infer_after_assign() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let mvar = Expr::mk_mvar(Name::new("m1"));
+
+        // Assign ?m := zero
+        assert!(tc.is_def_eq(&mvar, &zero));
+        // infer(?m) should be Nat
+        let ty = tc.infer(&mvar).unwrap();
+        assert_eq!(ty, nat);
+    }
+
+    #[test]
+    fn test_level_constraint_solving() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let sort_u = Expr::Sort(Level::Param(Name::new("u")));
+        let sort_1 = Expr::mk_type();
+
+        // Sort(u) should unify with Sort(1) and record u -> 1
+        assert!(tc.is_def_eq(&sort_u, &sort_1));
+        // After unification, Sort(u) should be defeq to Sort(1)
+        assert!(tc.is_def_eq(&sort_u, &sort_1));
+        // And Sort(u) should be defeq to Sort(u) (reflexive)
+        assert!(tc.is_def_eq(&sort_u, &sort_u));
+    }
+
+    #[test]
+    fn test_level_param_exact_match() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let sort_u1 = Expr::Sort(Level::Param(Name::new("u")));
+        let sort_u2 = Expr::Sort(Level::Param(Name::new("u")));
+        let sort_v = Expr::Sort(Level::Param(Name::new("v")));
+
+        // Same param should match
+        assert!(tc.is_def_eq(&sort_u1, &sort_u2));
+        // Different params should match via unification
+        assert!(tc.is_def_eq(&sort_u1, &sort_v));
+    }
+
+    #[test]
+    fn test_level_occur_check() {
+        let env = mk_env_with_nat();
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let u = Level::Param(Name::new("u"));
+        let sort_u = Expr::Sort(u.clone());
+        let sort_succ_u = Expr::Sort(Level::mk_succ(u.clone()));
+
+        // u should NOT match succ(u) (occur check)
+        assert!(!tc.is_def_eq(&sort_u, &sort_succ_u));
     }
 }

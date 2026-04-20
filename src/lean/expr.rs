@@ -614,6 +614,22 @@ impl Expr {
         }
     }
 
+    /// Check if expression contains a specific named metavariable
+    pub fn has_mvar_named(&self, name: &Name) -> bool {
+        match self {
+            Expr::MVar(n) => n == name,
+            Expr::App(f, a) => f.has_mvar_named(name) || a.has_mvar_named(name),
+            Expr::Lambda(_, _, ty, body) => ty.has_mvar_named(name) || body.has_mvar_named(name),
+            Expr::Pi(_, _, ty, body) => ty.has_mvar_named(name) || body.has_mvar_named(name),
+            Expr::Let(_, ty, value, body, _) => {
+                ty.has_mvar_named(name) || value.has_mvar_named(name) || body.has_mvar_named(name)
+            }
+            Expr::MData(_, e) => e.has_mvar_named(name),
+            Expr::Proj(_, _, e) => e.has_mvar_named(name),
+            _ => false,
+        }
+    }
+
     /// Check if expression contains any free variables
     pub fn has_fvar(&self) -> bool {
         match self {

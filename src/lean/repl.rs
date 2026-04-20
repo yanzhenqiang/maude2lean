@@ -55,12 +55,15 @@ impl Repl {
         println!("╚═══════════════════════════════════════════════════════════════════════╝");
         println!();
 
-        // Pre-populate with Nat and Exists
+        // Pre-populate with Nat, Exists, and axioms
         println!("Pre-loaded: Nat (inductive), zero : Nat, succ : Nat → Nat");
         println!("Pre-loaded: Exists (inductive), intro : Π(A : Type). Π(P : A → Prop). Π(w : A). P w → Exists A P");
+        println!("Pre-loaded: Eq (inductive), refl, propext, choice");
         println!();
         self.load_nat();
         self.load_exists();
+        self.load_eq();
+        self.load_axioms();
 
         loop {
             print!("lean> ");
@@ -241,6 +244,118 @@ impl Repl {
                 self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
 
                 println!("  Added inductive: {}", name);
+                Ok(())
+            }
+            ParsedDecl::Structure { name, ty, fields } => {
+                let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                let struct_const = Expr::mk_const(Name::new(&name), vec![]);
+
+                // Build mk constructor type: field1 -> field2 -> ... -> Struct
+                let mut mk_ty = ParsedExpr::Ident(name.clone());
+                for (_fname, fty) in fields.iter().rev() {
+                    mk_ty = ParsedExpr::Pi("_".to_string(), Box::new(fty.clone()), Box::new(mk_ty));
+                }
+                let mk_ty_expr = mk_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+
+                let ind = InductiveType {
+                    name: Name::new(&name),
+                    ty: ty_expr.clone(),
+                    ctors: vec![
+                        Constructor { name: Name::new("mk"), ty: mk_ty_expr },
+                    ],
+                };
+
+                let decl = Declaration::Inductive {
+                    level_params: vec![],
+                    num_params: 0,
+                    types: vec![ind],
+                    is_unsafe: false,
+                };
+
+                self.env.add(decl).map_err(|e| e)?;
+                self.tc_state = TypeCheckerState::new(self.env.clone());
+
+                // Register constructors and recursor in bindings
+                let info = self.env.find(&Name::new(&name)).unwrap();
+                if let Some(ind_val) = info.to_inductive_val() {
+                    for ctor_name in &ind_val.ctors {
+                        let cn = ctor_name.to_string();
+                        self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+                    }
+                }
+
+                self.env_bindings.insert(name.clone(), struct_const.clone());
+                let rec_name = Name::new("rec").extend(&name);
+                let rec_name_str = format!("rec.{}", name);
+                self.env_bindings.insert(rec_name_str.clone(), Expr::mk_const(rec_name.clone(), vec![]));
+
+                // Generate projection definitions
+                let num_fields = fields.len();
+                for (field_idx, (field_name, field_ty)) in fields.iter().enumerate() {
+                    let proj_name = format!("{}.{}", name, field_name);
+
+                    // Build recursor application for projection
+                    // rec.Struct (fun _ => FieldTy) (fun f1 => fun f2 => ... => fi) p
+                    let field_ty_expr = field_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+
+                    // motive: fun _ => FieldTy
+                    let motive = Expr::Lambda(
+                        Name::new("_"),
+                        BinderInfo::Default,
+                        Rc::new(struct_const.clone()),
+                        Rc::new(field_ty_expr.clone()),
+                    );
+
+                    // minor: fun f1 => fun f2 => ... => fi
+                    // Build lambdas from inside out, using correct field types
+                    let mut minor = Expr::mk_bvar((num_fields - 1 - field_idx) as u64);
+                    for i in (0..num_fields).rev() {
+                        let fty_expr = fields[i].1.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                        minor = Expr::Lambda(
+                            Name::new(&format!("f{}", i)),
+                            BinderInfo::Default,
+                            Rc::new(fty_expr),
+                            Rc::new(minor),
+                        );
+                    }
+
+                    // parameter p : Struct
+                    let p_var = Expr::mk_fvar(Name::new("p"));
+                    let body = Expr::mk_app(
+                        Expr::mk_app(
+                            Expr::mk_app(Expr::mk_const(rec_name.clone(), vec![]), motive),
+                            minor,
+                        ),
+                        p_var.clone(),
+                    );
+
+                    let proj_value = Expr::Lambda(
+                        Name::new("p"),
+                        BinderInfo::Default,
+                        Rc::new(struct_const.clone()),
+                        Rc::new(body),
+                    );
+
+                    let proj_ty = Expr::mk_arrow(struct_const.clone(), field_ty_expr);
+
+                    let proj_decl = Declaration::Definition(DefinitionVal {
+                        constant_val: ConstantVal {
+                            name: Name::new(&proj_name),
+                            level_params: vec![],
+                            ty: proj_ty,
+                        },
+                        value: proj_value,
+                        hints: ReducibilityHints::Regular(0),
+                        safety: DefinitionSafety::Safe,
+                    });
+
+                    self.env.add(proj_decl).map_err(|e| e)?;
+                    self.env_bindings.insert(proj_name.clone(), Expr::mk_const(Name::new(&proj_name), vec![]));
+                    println!("  Added projection: {}", proj_name);
+                }
+
+                self.tc_state = TypeCheckerState::new(self.env.clone());
+                println!("  Added structure: {}", name);
                 Ok(())
             }
         }
@@ -657,6 +772,87 @@ impl Repl {
         self.env_bindings.insert("Exists".to_string(), Expr::mk_const(Name::new("Exists"), vec![]));
         self.env_bindings.insert("intro".to_string(), Expr::mk_const(Name::new("intro"), vec![]));
         self.env_bindings.insert("rec.Exists".to_string(), Expr::mk_const(Name::new("rec").extend("Exists"), vec![]));
+    }
+
+    fn load_eq(&mut self) {
+        let prop = Expr::mk_sort(Level::Zero);
+        let ty = Expr::mk_type();
+        // Eq : Π (A : Type), Π (a : A), Π (b : A), Prop
+        let eq_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
+            Expr::mk_pi(Name::new("a"), Expr::mk_bvar(0),
+                Expr::mk_pi(Name::new("b"), Expr::mk_bvar(1),
+                    prop.clone())));
+        // refl : Π (A : Type), Π (a : A), Eq A a a
+        let refl_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
+            Expr::mk_pi(Name::new("a"), Expr::mk_bvar(0),
+                Expr::mk_app(Expr::mk_app(Expr::mk_app(
+                    Expr::mk_const(Name::new("Eq"), vec![]),
+                    Expr::mk_bvar(1)),
+                    Expr::mk_bvar(0)),
+                    Expr::mk_bvar(0))));
+
+        let ind = InductiveType {
+            name: Name::new("Eq"),
+            ty: eq_ty,
+            ctors: vec![
+                Constructor { name: Name::new("refl"), ty: refl_ty },
+            ],
+        };
+        let _ = self.env.add(Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![ind],
+            is_unsafe: false,
+        });
+
+        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.env_bindings.insert("Eq".to_string(), Expr::mk_const(Name::new("Eq"), vec![]));
+        self.env_bindings.insert("refl".to_string(), Expr::mk_const(Name::new("refl"), vec![]));
+        self.env_bindings.insert("rec.Eq".to_string(), Expr::mk_const(Name::new("rec").extend("Eq"), vec![]));
+    }
+
+    fn load_axioms(&mut self) {
+        let prop = Expr::mk_sort(Level::Zero);
+        let ty = Expr::mk_type();
+
+        // propext : Π (P : Prop), Π (Q : Prop), Π (_ : P → Q), Π (_ : Q → P), Eq Prop P Q
+        let eq_const = Expr::mk_const(Name::new("Eq"), vec![]);
+        let eq_app = |a, b, c| Expr::mk_app(Expr::mk_app(Expr::mk_app(eq_const.clone(), a), b), c);
+        let propext_ty = Expr::mk_pi(Name::new("P"), prop.clone(),
+            Expr::mk_pi(Name::new("Q"), prop.clone(),
+                Expr::mk_pi(Name::new("_"), Expr::mk_arrow(Expr::mk_bvar(1), Expr::mk_bvar(1)),
+                    Expr::mk_pi(Name::new("_"), Expr::mk_arrow(Expr::mk_bvar(2), Expr::mk_bvar(2)),
+                        eq_app(Expr::mk_bvar(3), Expr::mk_bvar(2), Expr::mk_bvar(1))))));
+
+        let propext_decl = Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal {
+                name: Name::new("propext"),
+                level_params: vec![],
+                ty: propext_ty,
+            },
+            is_unsafe: false,
+        });
+        let _ = self.env.add(propext_decl);
+
+        // choice : Π (A : Type), Π (P : A → Prop), Π (_ : Exists A P), A
+        let exists_app = Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("Exists"), vec![]), Expr::mk_bvar(1)), Expr::mk_bvar(0));
+        let choice_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
+            Expr::mk_pi(Name::new("P"), Expr::mk_arrow(Expr::mk_bvar(0), prop.clone()),
+                Expr::mk_pi(Name::new("_"), exists_app, Expr::mk_bvar(2))));
+
+        let choice_decl = Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal {
+                name: Name::new("choice"),
+                level_params: vec![],
+                ty: choice_ty,
+            },
+            is_unsafe: false,
+        });
+        let _ = self.env.add(choice_decl);
+
+        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.env_bindings.insert("propext".to_string(), Expr::mk_const(Name::new("propext"), vec![]));
+        self.env_bindings.insert("choice".to_string(), Expr::mk_const(Name::new("choice"), vec![]));
     }
 
     fn load_quot(&mut self) {
