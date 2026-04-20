@@ -1,7 +1,6 @@
 use super::declaration::*;
 use super::environment::Environment;
 use super::expr::*;
-use super::maude_bridge::reduce_expr_with_env;
 use super::repl_parser::{ParsedDecl, Parser as ReplParser};
 use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
@@ -23,7 +22,6 @@ use std::rc::Rc;
 ///   :reduce <expr>                Reduce to weak head normal form
 ///   :nf <expr>                    Reduce to full normal form
 ///   :defeq <e1> = <e2>            Check definitional equality
-///   :maude <expr>                 Reduce via Maude engine
 ///   :help                         Show this help
 ///   :quit                         Exit
 pub struct Repl {
@@ -138,10 +136,6 @@ impl Repl {
 
         if input.starts_with(":defeq ") {
             return self.handle_defeq(&input[7..]).map(|_| false);
-        }
-
-        if input.starts_with(":maude ") {
-            return self.handle_maude(&input[7..]).map(|_| false);
         }
 
         // Default: try to infer and reduce the expression
@@ -655,13 +649,6 @@ impl Repl {
         Ok(())
     }
 
-    fn handle_maude(&mut self, rest: &str) -> Result<(), String> {
-        let expr = self.parse_and_convert(rest)?;
-        let result = reduce_expr_with_env(&expr, &self.env).map_err(|e| e)?;
-        println!("  {}", format_expr(&result));
-        Ok(())
-    }
-
     fn print_env(&self) {
         println!("  Current environment:");
         println!("    Constants: {}", self.env.num_constants());
@@ -683,7 +670,6 @@ impl Repl {
         println!("  :reduce <expr>                Reduce to WHNF");
         println!("  :nf <expr>                    Reduce to full NF");
         println!("  :defeq <e1> = <e2>            Check definitional equality");
-        println!("  :maude <expr>                 Reduce via Maude engine");
         println!("  :help                         Show this help");
         println!("  :quit                         Exit");
         println!();
