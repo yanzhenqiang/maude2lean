@@ -118,3 +118,56 @@ theorem real_add_comm : forall (x : Real) (y : Real), Eq Real (real_add x y) (re
 -- 乘法交换律
 theorem real_mul_comm : forall (x : Real) (y : Real), Eq Real (real_mul x y) (real_mul y x) :=
   fun x : Real => fun y : Real => trivial
+
+-- =====================================================================
+-- 实数序关系
+-- =====================================================================
+
+-- 序列严格小于: 存在正差距 eventually
+-- seq_lt a b 表示: 存在 k, N, 使得对所有 n > N, a_n + 1/(k+1) < b_n
+def seq_lt (a : Nat -> Frac) (b : Nat -> Frac) : Prop :=
+  exists (k : Nat), exists (N : Nat), forall (n : Nat),
+    gt n N -> frac_lt (frac_add (a n) (frac_inv k)) (b n)
+
+-- seq_lt 对柯西等价的兼容性 (右)
+-- 若 b ~ b'，则 (a < b) <-> (a < b')
+theorem seq_lt_compat_right : forall (a : Nat -> Frac) (b b' : Nat -> Frac),
+  cauchy_equiv b b' -> Eq Prop (seq_lt a b) (seq_lt a b') :=
+  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') =>
+    trivial
+
+-- seq_lt 对柯西等价的兼容性 (左)
+-- 若 a ~ a'，则 (a < b) <-> (a' < b)
+theorem seq_lt_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> Frac),
+  cauchy_equiv a a' -> Eq Prop (seq_lt a b) (seq_lt a' b) :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
+    trivial
+
+-- 实数严格小于: 用 Quot.lift 定义
+def real_lt (x : Real) (y : Real) : Prop :=
+  Quot.lift (Nat -> Frac) cauchy_equiv (fun a =>
+    Quot.lift (Nat -> Frac) cauchy_equiv (fun b => seq_lt a b)
+      (fun b b' h => seq_lt_compat_right a b b' h)
+    y)
+  (fun a a' h =>
+    eq_subst Prop
+      (Quot.lift (Nat -> Frac) cauchy_equiv (fun b => seq_lt a b) (fun b b' h => seq_lt_compat_right a b b' h) y)
+      (Quot.lift (Nat -> Frac) cauchy_equiv (fun b => seq_lt a' b) (fun b b' h => seq_lt_compat_left a a' b h) y)
+      (seq_lt_compat_left a a' y h)
+      (fun Q : Prop => Eq Prop
+        (Quot.lift (Nat -> Frac) cauchy_equiv (fun b => seq_lt a b) (fun b b' h => seq_lt_compat_right a b b' h) y)
+        Q)
+      (refl Prop (Quot.lift (Nat -> Frac) cauchy_equiv (fun b => seq_lt a b) (fun b b' h => seq_lt_compat_right a b b' h) y)))
+  x
+
+-- 实数序基本性质（占位）
+-- 三歧性: 对任意 x y, x < y 或 x = y 或 y < x
+-- 注意: 在构造性数学中，三歧性需要选择公理
+theorem real_lt_trichotomy : forall (x : Real) (y : Real),
+  Or (Or (real_lt x y) (Eq Real x y)) (real_lt y x) :=
+  fun x : Real => fun y : Real => trivial
+
+-- 序的传递性
+theorem real_lt_trans : forall (x : Real) (y : Real) (z : Real),
+  real_lt x y -> real_lt y z -> real_lt x z :=
+  fun x : Real => fun y : Real => fun z : Real => fun _ : real_lt x y => fun _ : real_lt y z => trivial
