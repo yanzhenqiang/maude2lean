@@ -737,6 +737,13 @@ impl<'a> TypeChecker<'a> {
                 if self.try_eta_expansion(t, s) || self.try_eta_expansion(s, t) {
                     return true;
                 }
+                // Try structure eta
+                if let Some(result) = self.try_struct_eta(t, s) {
+                    return result;
+                }
+                if let Some(result) = self.try_struct_eta(s, t) {
+                    return result;
+                }
                 false
             }
         }
@@ -814,6 +821,56 @@ impl<'a> TypeChecker<'a> {
             }
         }
         false
+    }
+
+    /// Structure eta: if t has a structure type and s is the constructor application
+    /// with projections of t, then t = s.
+    fn try_struct_eta(&mut self, t: &Expr, s: &Expr) -> Option<bool> {
+        // Check if s is a constructor application
+        let (ctor_fn, s_args) = s.get_app_args();
+        let ctor_name = ctor_fn?.const_name()?;
+
+        let ctor_info = self.st.env().find(ctor_name)?;
+        if !ctor_info.is_constructor() {
+            return None;
+        }
+        let ctor_val = ctor_info.to_constructor_val()?;
+        let ind_name = &ctor_val.induct;
+        let num_fields = ctor_val.num_fields as usize;
+        let num_params = ctor_val.num_params as usize;
+
+        // Check if the inductive type has exactly one constructor (struct-like)
+        let ind_info = self.st.env().find(ind_name)?;
+        let ind_val = ind_info.to_inductive_val()?;
+        if ind_val.ctors.len() != 1 {
+            return None;
+        }
+
+        // Check if t's type matches the inductive type
+        let t_ty = self.infer(t).ok()?;
+        let t_ty_head = t_ty.get_app_fn();
+        let t_ty_name = t_ty_head.const_name()?;
+        if t_ty_name != ind_name {
+            return None;
+        }
+
+        // Build eta-expanded form: mk (Proj t 0) (Proj t 1) ...
+        let mut eta = Expr::mk_const(ctor_name.clone(), vec![]);
+
+        // Apply params from s
+        for i in 0..num_params {
+            if i < s_args.len() {
+                eta = Expr::mk_app(eta, s_args[i].clone());
+            }
+        }
+
+        // Apply projections of t
+        for i in 0..num_fields {
+            let proj = Expr::Proj(ind_name.clone(), i as u64, Rc::new(t.clone()));
+            eta = Expr::mk_app(eta, proj);
+        }
+
+        Some(self.is_def_eq(&eta, s))
     }
 
     /// Full normalization: recursively reduce to normal form

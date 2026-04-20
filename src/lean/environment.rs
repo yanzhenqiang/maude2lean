@@ -175,7 +175,7 @@ impl Environment {
                     &ctor.ty, num_params, &ind_type.name, num_params, num_indices
                 )?;
                 // Check if constructor has recursive arguments
-                if Self::ctor_is_recursive(&ctor.ty, num_params, &ind_type.name) {
+                if Self::ctor_is_recursive_mutual(&ctor.ty, num_params, &all_names) {
                     is_rec = true;
                 }
             }
@@ -233,21 +233,39 @@ impl Environment {
 
             // Generate recursor
             let rec_name = Name::new("rec").extend(&ind_type.name.to_string());
-            let num_minors = ind_type.ctors.len() as u64;
-            let mut rules = Vec::new();
+            let type_idx = _idx; // index of current type in all_names
+            let num_motives = all_names.len() as u64;
 
+            // Build global constructor list: all constructors across all types
+            // Each entry: (global_cidx, type_idx_of_ctor, constructor)
+            let mut global_ctors: Vec<(usize, usize, &Constructor)> = Vec::new();
+            for (tidx, t) in types.iter().enumerate() {
+                for (cidx, ctor) in t.ctors.iter().enumerate() {
+                    global_ctors.push((global_ctors.len(), tidx, ctor));
+                }
+            }
+            let total_minors = global_ctors.len() as u64;
+
+            // Build rules only for the current type's constructors
+            let mut rules = Vec::new();
             for (cidx, ctor) in ind_type.ctors.iter().enumerate() {
                 let nfields = Self::count_fields(&ctor.ty, num_params);
-                let ctor_is_rec = Self::ctor_is_recursive(&ctor.ty, num_params, &ind_type.name);
+                let ctor_is_rec = Self::ctor_is_recursive_mutual(&ctor.ty, num_params, &all_names);
+                // Find global cidx for this constructor
+                let global_cidx = global_ctors.iter()
+                    .position(|(_, tidx, c)| *tidx == type_idx && c.name == ctor.name)
+                    .unwrap_or(cidx) as u64;
                 let rhs = Self::mk_recursor_rhs(
                     &ctor.ty,
                     num_params,
                     nfields,
-                    num_minors,
-                    cidx as u64,
+                    total_minors,
+                    global_cidx,
                     &ind_type.name,
                     &level_params,
                     ctor_is_rec,
+                    &all_names,
+                    type_idx as u64,
                 );
                 rules.push(RecursorRule {
                     ctor: ctor.name.clone(),
@@ -256,13 +274,15 @@ impl Environment {
                 });
             }
 
-            // Generate recursor type (simplified but structurally sound)
+            // Generate recursor type with minor premises for ALL constructors
             let (rec_ty, rec_u) = Self::mk_recursor_type(
                 &ind_type.name,
                 &ind_type.ty,
                 num_params,
                 num_indices,
-                &ind_type.ctors,
+                &global_ctors,
+                &all_names,
+                type_idx,
             );
 
             let mut rec_level_params = level_params.clone();
@@ -277,8 +297,8 @@ impl Environment {
                 all: all_names.clone(),
                 num_params,
                 num_indices,
-                num_motives: 1,
-                num_minors,
+                num_motives,
+                num_minors: total_minors,
                 rules,
                 k: num_indices == 0 && !is_rec, // K-like if no indices and not recursive
                 is_unsafe,
@@ -334,7 +354,7 @@ impl Environment {
         ))
     }
 
-    /// Check if a constructor has recursive arguments.
+    /// Check if a constructor has recursive arguments (single inductive).
     fn ctor_is_recursive(ctor_ty: &Expr, num_params: u64, ind_name: &Name) -> bool {
         let mut current = ctor_ty;
         // Skip parameter binders
@@ -348,6 +368,25 @@ impl Environment {
         // Check field types for occurrences of the inductive type
         while let Expr::Pi(_, _, domain, body) = current {
             if Self::expr_contains_const(domain, ind_name) {
+                return true;
+            }
+            current = body;
+        }
+        false
+    }
+
+    /// Check if a constructor has recursive arguments (mutual inductive).
+    fn ctor_is_recursive_mutual(ctor_ty: &Expr, num_params: u64, all_names: &[Name]) -> bool {
+        let mut current = ctor_ty;
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                return false;
+            }
+        }
+        while let Expr::Pi(_, _, domain, body) = current {
+            if Self::expr_contains_any_const(domain, all_names) {
                 return true;
             }
             current = body;
@@ -370,6 +409,22 @@ impl Environment {
             Expr::Sort(l) => Self::level_contains_name(l, name),
             _ => false,
         }
+    }
+
+    /// Check if an expression contains any of the given constants.
+    fn expr_contains_any_const(e: &Expr, names: &[Name]) -> bool {
+        names.iter().any(|n| Self::expr_contains_const(e, n))
+    }
+
+    /// Find which mutual type (if any) the expression contains.
+    /// Returns the index in `names` of the first matching type.
+    fn find_mutual_type(e: &Expr, names: &[Name]) -> Option<usize> {
+        for (i, name) in names.iter().enumerate() {
+            if Self::expr_contains_const(e, name) {
+                return Some(i);
+            }
+        }
+        None
     }
 
     fn level_contains_name(l: &Level, name: &Name) -> bool {
@@ -423,16 +478,17 @@ impl Environment {
     /// Build the recursor rule RHS for a constructor.
     ///
     /// The result is wrapped in lambdas with binding order (from outside in):
-    ///   params, motive, minors, fields
+    ///   params, motives, minors, fields
     ///
     /// Inside the innermost body:
     ///   BVar(0) = last field
     ///   BVar(nfields - 1) = first field
     ///   BVar(nfields) = last minor premise
     ///   BVar(nfields + n_minors - 1) = first minor premise
-    ///   BVar(nfields + n_minors) = motive
-    ///   BVar(nfields + n_minors + 1) = last param
-    ///   BVar(nfields + n_minors + num_params) = first param
+    ///   BVar(nfields + n_minors) = last motive
+    ///   BVar(nfields + n_minors + n_motives - 1) = first motive
+    ///   BVar(nfields + n_minors + n_motives) = last param
+    ///   BVar(nfields + n_minors + n_motives + num_params - 1) = first param
     fn mk_recursor_rhs(
         ctor_ty: &Expr,
         num_params: u64,
@@ -442,8 +498,11 @@ impl Environment {
         ind_name: &Name,
         level_params: &[Name],
         is_rec: bool,
+        all_names: &[Name],
+        current_type_idx: u64,
     ) -> Expr {
-        let total_bound = nfields + num_minors + 1 + num_params;
+        let num_motives = all_names.len() as u64;
+        let total_bound = nfields + num_minors + num_motives + num_params;
 
         // Build the inner body
         let minor_idx = nfields + num_minors - 1 - cidx;
@@ -457,9 +516,15 @@ impl Environment {
 
         // For recursive constructors, also apply the recursive call
         if is_rec && nfields > 0 {
+            // Determine which mutual type the last field references
+            let last_field_type = Self::get_last_field_type(ctor_ty, num_params);
+            let rec_type_idx = Self::find_mutual_type(&last_field_type, all_names)
+                .unwrap_or(current_type_idx as usize) as u64;
+            let rec_type_name = &all_names[rec_type_idx as usize];
+
             let rec_levels: Vec<Level> = level_params.iter().cloned().map(Level::Param).collect();
             let mut rec_call = Expr::mk_const(
-                Name::new("rec").extend(&ind_name.to_string()),
+                Name::new("rec").extend(&rec_type_name.to_string()),
                 rec_levels,
             );
 
@@ -469,9 +534,11 @@ impl Environment {
                 rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(param_idx));
             }
 
-            // Apply motive
-            let motive_idx = total_bound - 1 - num_params;
-            rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(motive_idx));
+            // Apply all motives
+            for i in 0..num_motives {
+                let motive_idx = total_bound - 1 - num_params - i;
+                rec_call = Expr::mk_app(rec_call, Expr::mk_bvar(motive_idx));
+            }
 
             // Apply minors
             for i in 0..num_minors {
@@ -480,12 +547,6 @@ impl Environment {
             }
 
             // Extract index expressions from constructor return type and map BVars to recursor context.
-            // In constructor return type (after skipping params+fields):
-            //   BVar(j) for j < nfields refers to field j (from innermost)
-            //   BVar(j) for j >= nfields refers to param (j - nfields) from innermost
-            // In recursor rule body:
-            //   BVar(j) for j < nfields refers to field j (from innermost)
-            //   BVar(j) for j >= nfields refers to param, shifted by num_minors + 1
             let ctor_return = Self::ctor_return_type(ctor_ty, num_params);
             let index_exprs = Self::extract_indices_from_return_type(&ctor_return, ind_name, num_params);
             let mapped_indices: Vec<Expr> = index_exprs.iter()
@@ -493,7 +554,7 @@ impl Environment {
                     if j < nfields {
                         j
                     } else {
-                        num_minors + 1 + j
+                        num_minors + num_motives + j
                     }
                 }))
                 .collect();
@@ -509,7 +570,7 @@ impl Environment {
             body = Expr::mk_app(body, rec_call);
         }
 
-        // Wrap body in lambdas: fields (innermost), then minors, then motive, then params (outermost)
+        // Wrap body in lambdas: fields (innermost), then minors, then motives, then params (outermost)
         let mut result = body;
 
         // Wrap fields (last to first)
@@ -532,13 +593,15 @@ impl Environment {
             );
         }
 
-        // Wrap motive
-        result = Expr::Lambda(
-            Name::new("P"),
-            BinderInfo::Default,
-            Rc::new(Expr::mk_type()),
-            Rc::new(result),
-        );
+        // Wrap motives (last to first, so P0 is outermost)
+        for j in (0..num_motives).rev() {
+            result = Expr::Lambda(
+                Name::new(&format!("P{}", j)),
+                BinderInfo::Default,
+                Rc::new(Expr::mk_type()),
+                Rc::new(result),
+            );
+        }
 
         // Wrap params (last to first)
         for j in (0..num_params).rev() {
@@ -551,6 +614,26 @@ impl Environment {
         }
 
         result
+    }
+
+    /// Extract the type of the last field from a constructor type.
+    fn get_last_field_type(ctor_ty: &Expr, num_params: u64) -> Expr {
+        let mut current = ctor_ty;
+        // Skip parameters
+        for _ in 0..num_params {
+            if let Some(body) = current.binding_body() {
+                current = body;
+            } else {
+                return Expr::mk_type();
+            }
+        }
+        // Collect field types
+        let mut field_types = Vec::new();
+        while let Expr::Pi(_, _, domain, body) = current {
+            field_types.push((**domain).clone());
+            current = body;
+        }
+        field_types.last().cloned().unwrap_or(Expr::mk_type())
     }
 
     /// Extract index types from the inductive type (Pi binders after params).
@@ -623,37 +706,39 @@ impl Environment {
 
     /// Generate a recursor type for the inductive type.
     /// The recursor type is:
-    ///   (params) -> (P : forall indices, I params indices -> Sort u) -> minor_premises ->
-    ///   (indices) -> (x : I params indices) -> P indices x
+    ///   (params) -> (P0 : ... -> Sort u) -> ... -> (Pn : ... -> Sort u) -> minor_premises ->
+    ///   (indices) -> (x : I params indices) -> P_current indices x
     fn mk_recursor_type(
         ind_name: &Name,
         ind_ty: &Expr,
         num_params: u64,
         num_indices: u64,
-        ctors: &[Constructor],
+        global_ctors: &[(usize, usize, &Constructor)],
+        all_names: &[Name],
+        current_type_idx: usize,
     ) -> (Expr, Name) {
-        let num_minors = ctors.len() as u64;
+        let num_minors = global_ctors.len() as u64;
+        let num_motives = all_names.len() as u64;
         let u = Name::new("u");
         let u_level = Level::Param(u.clone());
 
-        // Innermost expression: P indices x
+        // Innermost expression: P_current indices x
         // In the final structure (inside x):
         //   x = BVar(0)
-        //   index_{num_indices-1} = BVar(1), ..., index_0 = BVar(num_indices)
-        //   minor_{num_minors-1} = BVar(num_indices + 1), ..., minor_0 = BVar(num_indices + num_minors)
-        //   P = BVar(num_indices + num_minors + 1)
-        //   params = after P
-        let mut result = Expr::mk_bvar(num_indices + num_minors + 1);
-        // Apply indices to P (index_0 outermost, so highest BVar first)
+        //   indices = BVar(1) to BVar(num_indices)
+        //   minors = BVar(num_indices + 1) to BVar(num_indices + num_minors)
+        //   motives = BVar(num_indices + num_minors + 1) to BVar(num_indices + num_minors + num_motives)
+        //   params = after motives
+        let p_current_idx = num_indices + num_minors + 1 + current_type_idx as u64;
+        let mut result = Expr::mk_bvar(p_current_idx);
+        // Apply indices to P_current
         for i in 0..num_indices {
             result = Expr::mk_app(result, Expr::mk_bvar(num_indices - i));
         }
         result = Expr::mk_app(result, Expr::mk_bvar(0));
 
         // Wrap major premise: (x : I params indices)
-        // In x's domain, params start at BVar(num_indices + num_minors + 1) and
-        // indices start right after params.
-        let x_ty = Self::mk_inductive_app(ind_name, num_params, num_indices, num_indices + num_minors + 1);
+        let x_ty = Self::mk_inductive_app(ind_name, num_params, num_indices, num_indices + num_minors + num_motives);
         result = Expr::mk_pi(Name::new("x"), x_ty, result);
 
         // Wrap indices (from last to first so i0 is outermost)
@@ -662,21 +747,25 @@ impl Environment {
             result = Expr::mk_pi(name.clone(), ty.clone(), result);
         }
 
-        // Wrap minor premises (from last to first so m0 is outermost)
-        for cidx in (0..num_minors).rev() {
+        // Wrap minor premises for ALL constructors (from last to first)
+        for (global_cidx, ctor_type_idx, ctor) in global_ctors.iter().rev() {
             let minor_ty = Self::mk_minor_premise_type(
-                &ctors[cidx as usize],
+                ctor,
                 num_params,
                 num_indices,
-                ind_name,
-                cidx,
+                &all_names[*ctor_type_idx],
+                *global_cidx as u64,
+                all_names,
             );
-            result = Expr::mk_pi(Name::new(&format!("m{}", cidx)), minor_ty, result);
+            result = Expr::mk_pi(Name::new(&format!("m{}", global_cidx)), minor_ty, result);
         }
 
-        // Wrap motive: (P : forall indices, I params indices -> Sort u)
-        let motive_ty = Self::mk_motive_type(ind_name, ind_ty, num_params, num_indices, u_level);
-        result = Expr::mk_pi(Name::new("P"), motive_ty, result);
+        // Wrap motives (P0 first, then P1, etc.)
+        // Pj is the motive for all_names[j]
+        for j in (0..num_motives).rev() {
+            let motive_ty = Self::mk_motive_type(&all_names[j as usize], ind_ty, num_params, num_indices, u_level.clone());
+            result = Expr::mk_pi(Name::new(&format!("P{}", j)), motive_ty, result);
+        }
 
         // Wrap parameters (from last to first so p0 is outermost)
         let param_types = Self::extract_param_types(ind_ty, num_params);
@@ -729,7 +818,10 @@ impl Environment {
         _num_indices: u64,
         ind_name: &Name,
         cidx: u64,
+        all_names: &[Name],
     ) -> Expr {
+        let num_motives = all_names.len() as u64;
+
         // Collect field types from constructor type (skipping params)
         let mut fields = Vec::new();
         let mut current = &ctor.ty;
@@ -747,13 +839,11 @@ impl Environment {
 
         let num_ihs = fields
             .iter()
-            .filter(|(_, d)| Self::expr_contains_const(d, ind_name))
+            .filter(|(_, d)| Self::expr_contains_any_const(d, all_names))
             .count();
         let total_inner = fields.len() + num_ihs;
 
         // Extract index expressions from constructor return type.
-        // These use de Bruijn indices relative to the constructor's field binders.
-        // We shift them by +num_ihs because ih binders are interleaved inside fields.
         let ctor_return = Self::ctor_return_type(&ctor.ty, num_params);
         let index_exprs: Vec<Expr> = Self::extract_indices_from_return_type(&ctor_return, ind_name, num_params)
             .into_iter()
@@ -761,19 +851,18 @@ impl Environment {
             .collect();
 
         // In the minor premise domain, the recursor-level binders from inside out are:
-        //   preceding minors (cidx of them), P (1), params (num_params)
-        // So P is at BVar(fidx + cidx) when inside field fidx's domain,
-        // and param i is at BVar(fidx + cidx + 1 + i).
-        //
-        // In the return type (innermost, after all field/ih binders):
-        //   P is at BVar(total_inner + cidx)
-        //   param i is at BVar(total_inner + cidx + 1 + i)
+        //   preceding minors (cidx of them), motives (num_motives), params (num_params)
+        // So P0 (first motive) is at BVar(total_inner + cidx) in the return type,
+        // and Pj is at BVar(total_inner + cidx + j).
+        // param i is at BVar(total_inner + cidx + num_motives + i).
 
-        // Build return type: P indices (ctor params fields)
+        // Build return type: P_current indices (ctor params fields)
+        let current_type_idx = all_names.iter().position(|n| n == ind_name).unwrap_or(0) as u64;
+        let p_current_idx = total_inner as u64 + cidx + current_type_idx;
         let mut ctor_app = Expr::mk_const(ctor.name.clone(), vec![]);
         // Apply params
         for i in 0..num_params {
-            let param_idx = total_inner as u64 + cidx + 1 + i;
+            let param_idx = total_inner as u64 + cidx + num_motives + i;
             ctor_app = Expr::mk_app(ctor_app, Expr::mk_bvar(param_idx));
         }
         // Apply fields (field j is at BVar(total_inner - 1 - j) from inside all binders)
@@ -782,8 +871,8 @@ impl Environment {
             ctor_app = Expr::mk_app(ctor_app, Expr::mk_bvar(field_bvar));
         }
 
-        let mut result = Expr::mk_bvar(total_inner as u64 + cidx);
-        // Apply indices to P
+        let mut result = Expr::mk_bvar(p_current_idx);
+        // Apply indices to P_current
         for idx_expr in &index_exprs {
             result = Expr::mk_app(result, idx_expr.clone());
         }
@@ -792,12 +881,13 @@ impl Environment {
         // Wrap field binders from inside out (last field first).
         // For each field, wrap ih FIRST (making it inner), then field (outer).
         for fidx in (0..fields.len()).rev() {
-            let is_recursive = Self::expr_contains_const(&fields[fidx].1, ind_name);
+            let maybe_recursive = Self::find_mutual_type(&fields[fidx].1, all_names);
 
-            if is_recursive {
-                // ih_ty = P indices field
-                // In ih_ty: field = BVar(0), P = BVar(fidx + 1 + cidx)
-                let p_idx_in_ih_ty = (fidx + 1) as u64 + cidx;
+            if let Some(rec_type_idx) = maybe_recursive {
+                // ih_ty = P_rec indices field
+                // P_rec is the motive for the recursive field's type.
+                // In ih_ty: field = BVar(0), P_rec = BVar(fidx + 1 + cidx + rec_type_idx)
+                let p_idx_in_ih_ty = (fidx + 1) as u64 + cidx + rec_type_idx as u64;
                 let mut ih_ty = Expr::mk_bvar(p_idx_in_ih_ty);
                 for idx_expr in &index_exprs {
                     ih_ty = Expr::mk_app(ih_ty, idx_expr.clone());
@@ -808,8 +898,8 @@ impl Environment {
 
             // field_ty: convert param constants to BVars.
             // In field_ty (outside field fidx, inside earlier fields):
-            // param i = BVar(fidx + cidx + 1 + i)
-            let param_base = fidx as u64 + cidx + 1;
+            // param i = BVar(fidx + cidx + num_motives + i)
+            let param_base = fidx as u64 + cidx + num_motives;
             let domain = Self::subst_params_with_bvars(
                 &fields[fidx].1,
                 num_params,
@@ -1644,5 +1734,96 @@ mod tests {
 
         let result = tc.nf(&app);
         assert_eq!(result, one, "le.rec on le_succ should reduce to succ (le.rec ... le_zero)");
+    }
+
+    #[test]
+    fn test_mutual_inductive_even_odd() {
+        let mut env = Environment::new();
+
+        let type0 = Expr::mk_type();
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+
+        // even : Nat -> Type
+        let even_ty = Expr::mk_pi(Name::new("n"), nat.clone(), type0.clone());
+        // odd : Nat -> Type
+        let odd_ty = Expr::mk_pi(Name::new("n"), nat.clone(), type0.clone());
+
+        let even = Expr::mk_const(Name::new("even"), vec![]);
+        let odd = Expr::mk_const(Name::new("odd"), vec![]);
+        let zero = Expr::mk_const(Name::new("zero"), vec![]);
+        let succ = Expr::mk_const(Name::new("succ"), vec![]);
+
+        // even.zero : even 0
+        let even_zero_ctor = Constructor {
+            name: Name::new("even_zero"),
+            ty: Expr::mk_app(even.clone(), zero.clone()),
+        };
+
+        // even.succ : forall n, odd n -> even (succ n)
+        let even_succ_ctor = Constructor {
+            name: Name::new("even_succ"),
+            ty: Expr::mk_pi(
+                Name::new("n"),
+                nat.clone(),
+                Expr::mk_arrow(
+                    Expr::mk_app(odd.clone(), Expr::mk_bvar(0)),
+                    Expr::mk_app(even.clone(), Expr::mk_app(succ.clone(), Expr::mk_bvar(1))),
+                ),
+            ),
+        };
+
+        // odd.succ : forall n, even n -> odd (succ n)
+        let odd_succ_ctor = Constructor {
+            name: Name::new("odd_succ"),
+            ty: Expr::mk_pi(
+                Name::new("n"),
+                nat.clone(),
+                Expr::mk_arrow(
+                    Expr::mk_app(even.clone(), Expr::mk_bvar(0)),
+                    Expr::mk_app(odd.clone(), Expr::mk_app(succ.clone(), Expr::mk_bvar(1))),
+                ),
+            ),
+        };
+
+        let even_ind = InductiveType {
+            name: Name::new("even"),
+            ty: even_ty,
+            ctors: vec![even_zero_ctor, even_succ_ctor],
+        };
+
+        let odd_ind = InductiveType {
+            name: Name::new("odd"),
+            ty: odd_ty,
+            ctors: vec![odd_succ_ctor],
+        };
+
+        let decl = Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![even_ind, odd_ind],
+            is_unsafe: false,
+        };
+
+        env.add(decl).unwrap();
+
+        // Check types and constructors exist
+        assert!(env.contains(&Name::new("even")));
+        assert!(env.contains(&Name::new("odd")));
+        assert!(env.contains(&Name::new("even_zero")));
+        assert!(env.contains(&Name::new("even_succ")));
+        assert!(env.contains(&Name::new("odd_succ")));
+        assert!(env.contains(&Name::new("rec").extend("even")));
+        assert!(env.contains(&Name::new("rec").extend("odd")));
+
+        // Check recursor values
+        let even_rec = env.find(&Name::new("rec").extend("even")).unwrap().to_recursor_val().unwrap();
+        assert_eq!(even_rec.num_motives, 2, "even.rec should have 2 motives");
+        assert_eq!(even_rec.num_minors, 3, "even.rec should have 3 minors (all constructors)");
+        assert_eq!(even_rec.rules.len(), 2, "even.rec should have 2 rules");
+
+        let odd_rec = env.find(&Name::new("rec").extend("odd")).unwrap().to_recursor_val().unwrap();
+        assert_eq!(odd_rec.num_motives, 2, "odd.rec should have 2 motives");
+        assert_eq!(odd_rec.num_minors, 3, "odd.rec should have 3 minors (all constructors)");
+        assert_eq!(odd_rec.rules.len(), 1, "odd.rec should have 1 rule");
     }
 }
