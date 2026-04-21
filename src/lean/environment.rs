@@ -240,7 +240,7 @@ impl Environment {
             // Each entry: (global_cidx, type_idx_of_ctor, constructor)
             let mut global_ctors: Vec<(usize, usize, &Constructor)> = Vec::new();
             for (tidx, t) in types.iter().enumerate() {
-                for (cidx, ctor) in t.ctors.iter().enumerate() {
+                for (_cidx, ctor) in t.ctors.iter().enumerate() {
                     global_ctors.push((global_ctors.len(), tidx, ctor));
                 }
             }
@@ -800,7 +800,9 @@ impl Environment {
     /// `param_offset` is the BVar index of the first param at the point of use.
     fn mk_inductive_app(ind_name: &Name, num_params: u64, num_indices: u64, param_offset: u64) -> Expr {
         let mut app = Expr::mk_const(ind_name.clone(), vec![]);
-        for i in 0..num_params {
+        // Apply params in reverse order to match recursor binder structure
+        // (params are wrapped from last to first, so last param is innermost)
+        for i in (0..num_params).rev() {
             app = Expr::mk_app(app, Expr::mk_bvar(param_offset + i));
         }
         for i in 0..num_indices {

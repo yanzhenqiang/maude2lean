@@ -4,18 +4,26 @@
 -- 序列收敛到实数
 -- 依赖 FracArith.lean 中的 seq_converges_to_compat
 def seq_converges_to (a : Nat -> Frac) (L : Real) : Prop :=
-  Quot.lift (Nat -> Frac) cauchy_equiv (fun l =>
+  Quot.lift (Nat -> Frac) cauchy_equiv Prop (fun l =>
     forall (k : Nat), exists (N : Nat), forall (n : Nat),
       gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k)
   ) (fun l l' h => seq_converges_to_compat a l l' h) L
 
--- 从柯西条件提取 witness N
+-- 从柯西条件提取 witness N（使用选择公理）
 def cauchy_N (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) : Nat :=
-  rec.Exists Nat
+  choice Nat
     (fun N => forall (m : Nat), forall (n : Nat), gt m N -> gt n N -> frac_lt (frac_abs (frac_sub (a m) (a n))) (frac_inv k))
-    (fun _ => Nat)
-    (fun N _ => N)
     (h k)
+
+-- 从柯西条件推导自收敛性
+theorem cauchy_self_dist : forall (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) (n : Nat),
+  gt n (cauchy_N a h k) ->
+  frac_lt (frac_abs (frac_sub (a n) (a (succ (cauchy_N a h k))))) (frac_inv k) :=
+  fun a : (Nat -> Frac) => fun h : (is_cauchy a) => fun k : Nat => fun n : Nat => fun h_n : (gt n (cauchy_N a h k)) =>
+    choice_spec Nat
+      (fun N : Nat => forall (m : Nat), forall (n : Nat), gt m N -> gt n N -> frac_lt (frac_abs (frac_sub (a m) (a n))) (frac_inv k))
+      (h k)
+      n (succ (cauchy_N a h k)) h_n (gt_succ (cauchy_N a h k))
 
 -- 构造极限序列（对角线构造）
 def limit_seq (a : Nat -> Frac) (h : is_cauchy a) : Nat -> Frac :=

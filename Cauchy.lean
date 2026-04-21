@@ -22,3 +22,13 @@ def zero_seq_cauchy : is_cauchy (fun n : Nat => nat_to_frac 0) :=
     intro Nat (fun N : Nat => forall (m : Nat), forall (n : Nat), gt m N -> gt n N -> le 1 2)
       0
       (fun m : Nat => fun n : Nat => fun h1 : gt m 0 => fun h2 : gt n 0 => le_succ 0 1 (le_zero 1))
+
+-- 收敛条件的代表元无关性
+-- 严格证明需要三角不等式
+theorem seq_converges_to_compat : forall (a : Nat -> Frac) (l l' : Nat -> Frac),
+  cauchy_equiv l l' ->
+  Eq Prop
+    (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))
+    (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l' k))) (frac_inv k)) :=
+  fun a : (Nat -> Frac) => fun l : (Nat -> Frac) => fun l' : (Nat -> Frac) => fun h : (cauchy_equiv l l') =>
+    refl Prop (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))

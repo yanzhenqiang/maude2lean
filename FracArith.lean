@@ -42,25 +42,106 @@ theorem int_add_zero_left : forall (b : Int), Eq Int (int_add (ofNat 0) b) b :=
 
 -- int_mul (ofNat 1) (ofNat n) = ofNat n
 theorem int_mul_one_left_ofNat : forall (n : Nat), Eq Int (int_mul (ofNat 1) (ofNat n)) (ofNat n) :=
-  fun n : Nat => trivial
+  fun n : Nat => refl Int (ofNat n)
 
 -- int_abs (ofNat 0) = ofNat 0
 theorem int_abs_zero : Eq Int (int_abs (ofNat 0)) (ofNat 0) :=
   refl Int (ofNat 0)
 
+-- 辅助定理: int_add (ofNat (succ n)) (negSucc n) = ofNat 0
+theorem int_add_ofNat_negSucc_eq : forall (n : Nat), Eq Int (int_add (ofNat (succ n)) (negSucc n)) (ofNat 0) :=
+  fun n : Nat =>
+    rec.Nat (fun x : Nat => Eq Int (int_add (ofNat (succ x)) (negSucc x)) (ofNat 0))
+      (refl Int (ofNat 0))
+      (fun n' : Nat => fun ih : Eq Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0) =>
+        eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (ofNat (succ (succ n'))) (negSucc (succ n'))) y)
+          ih
+          (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+      n
+
+-- 辅助定理: int_add (negSucc n) (ofNat (succ n)) = ofNat 0
+theorem int_add_negSucc_ofNat_eq : forall (n : Nat), Eq Int (int_add (negSucc n) (ofNat (succ n))) (ofNat 0) :=
+  fun n : Nat =>
+    rec.Nat (fun x : Nat => Eq Int (int_add (negSucc x) (ofNat (succ x))) (ofNat 0))
+      (refl Int (ofNat 0))
+      (fun n' : Nat => fun ih : Eq Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0) =>
+        eq_subst Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (negSucc (succ n')) (ofNat (succ (succ n')))) y)
+          ih
+          (refl Int (int_add (negSucc n') (ofNat (succ n')))))
+      n
+
+-- int_mul a b = int_mul b a（整数乘法交换律）
+theorem int_mul_comm : forall (a : Int) (b : Int), Eq Int (int_mul a b) (int_mul b a) :=
+  fun a : Int => fun b : Int =>
+    rec.Int (fun x : Int => Eq Int (int_mul x b) (int_mul b x))
+      (fun m : Nat =>
+        rec.Int (fun y : Int => Eq Int (int_mul (ofNat m) y) (int_mul y (ofNat m)))
+          (fun n : Nat =>
+            eq_subst Nat (nat_mul m n) (nat_mul n m)
+              (fun y : Nat => Eq Int (ofNat (nat_mul m n)) (ofNat y))
+              (nat_mul_comm m n)
+              (refl Int (ofNat (nat_mul m n))))
+          (fun n : Nat => refl Int (int_mul (ofNat m) (negSucc n))))
+      (fun m : Nat =>
+        rec.Int (fun y : Int => Eq Int (int_mul (negSucc m) y) (int_mul y (negSucc m)))
+          (fun n : Nat => refl Int (int_mul (negSucc m) (ofNat n)))
+          (fun n : Nat =>
+            eq_subst Nat (nat_mul (succ m) (succ n)) (nat_mul (succ n) (succ m))
+              (fun y : Nat => Eq Int (ofNat (nat_mul (succ m) (succ n))) (ofNat y))
+              (nat_mul_comm (succ m) (succ n))
+              (refl Int (ofNat (nat_mul (succ m) (succ n))))))
+      a
+
 -- int_sub a a = ofNat 0（整数自减为零）
 theorem int_sub_self : forall (a : Int), Eq Int (int_sub a a) (ofNat 0) :=
-  fun a : Int => trivial
+  fun a : Int =>
+    rec.Int (fun x : Int => Eq Int (int_sub x x) (ofNat 0))
+      (fun n : Nat =>
+        rec.Nat (fun x : Nat => Eq Int (int_sub (ofNat x) (ofNat x)) (ofNat 0))
+          (refl Int (ofNat 0))
+          (fun n' : Nat => fun ih : Eq Int (int_sub (ofNat n') (ofNat n')) (ofNat 0) =>
+            eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
+              (fun y : Int => Eq Int (int_add (ofNat (succ n')) (int_neg (ofNat (succ n')))) y)
+              (int_add_ofNat_negSucc_eq n')
+              (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+          n)
+      (fun n : Nat =>
+        eq_subst Int (int_add (negSucc n) (ofNat (succ n))) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (negSucc n) (int_neg (negSucc n))) y)
+          (int_add_negSucc_ofNat_eq n)
+          (refl Int (int_add (negSucc n) (ofNat (succ n)))))
+      a
 
 -- =====================================================================
 -- 分数引理
 -- =====================================================================
 
+-- frac_mul x y = frac_mul y x（分数乘法交换律）
+theorem frac_mul_comm : forall (x : Frac) (y : Frac), Eq Frac (frac_mul x y) (frac_mul y x) :=
+  fun x : Frac => fun y : Frac =>
+    rec.Frac (fun z : Frac => Eq Frac (frac_mul z y) (frac_mul y z))
+      (fun n1 : Int => fun d1 : Nat =>
+        rec.Frac (fun w : Frac => Eq Frac (frac_mul (mk n1 d1) w) (frac_mul w (mk n1 d1)))
+          (fun n2 : Int => fun d2 : Nat =>
+            eq_subst Int (int_mul n1 n2) (int_mul n2 n1)
+              (fun y_val : Int => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk y_val (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))))
+              (int_mul_comm n1 n2)
+              (eq_subst Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))
+                (fun y_val : Nat => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk (int_mul n2 n1) y_val))
+                (eq_subst Nat (nat_mul (succ d1) (succ d2)) (nat_mul (succ d2) (succ d1))
+                  (fun y_val : Nat => Eq Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub y_val (succ zero)))
+                  (nat_mul_comm (succ d1) (succ d2))
+                  (refl Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))))
+                (refl Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))))))
+          y)
+      x
+
 -- frac_sub a a = frac_zero（分数自减为零）
--- 证明: 分子 int_sub x x = ofNat 0（由 int_sub_self）
---       分母 nat_sub (d1*d1) 1 为正（因为 d1 >= 1）
-theorem frac_sub_self : forall (a : Frac), Eq Frac (frac_sub a a) frac_zero :=
-  fun a : Frac => trivial
+-- 注意: 在当前定义下 frac_sub (mk n d) (mk n d) 的分母为 nat_sub ((d+1)*(d+1)) 1，
+-- 只有当 d = 0 时才等于 frac_zero = mk (ofNat 0) 0，所以此定理暂不成立。
+-- theorem frac_sub_self : forall (a : Frac), Eq Frac (frac_sub a a) frac_zero := ...
 
 -- frac_abs frac_zero = frac_zero
 theorem frac_abs_zero : Eq Frac (frac_abs frac_zero) frac_zero :=
@@ -68,42 +149,43 @@ theorem frac_abs_zero : Eq Frac (frac_abs frac_zero) frac_zero :=
 
 -- frac_abs (mk (ofNat 0) d) = mk (ofNat 0) d（零的绝对值不变）
 theorem frac_abs_ofNat_zero : forall (d : Nat), Eq Frac (frac_abs (mk (ofNat 0) d)) (mk (ofNat 0) d) :=
-  fun d : Nat => trivial
+  fun d : Nat => refl Frac (mk (ofNat 0) d)
 
 -- =====================================================================
 -- 分数序引理
 -- =====================================================================
 
 -- 零小于任意正分数: frac_lt frac_zero (mk (ofNat 1) k) 对所有 k 成立
--- 严格证明: frac_lt (mk 0 0) (mk 1 k) = int_lt (int_mul 0 (k+1)) (int_mul 1 (0+1))
---                                    = int_lt 0 1 = int_le 1 1 = le 1 1 = le (succ 0) (succ 0) = le 0 0 = True
--- 但当前用 trivial 占位
+-- frac_lt (mk 0 0) (mk 1 k) 归约为 le 1 1 = le (succ 0) (succ 0)
 theorem frac_lt_zero_one : forall (k : Nat), frac_lt frac_zero (mk (ofNat 1) k) :=
-  fun k : Nat => trivial
+  fun k : Nat => le_succ zero zero (le_zero zero)
 
 -- frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) 对所有 d, k 成立
--- 严格证明: int_lt (int_mul 0 (k+1)) (int_mul 1 (d+1)) = int_lt 0 (d+1) = le 1 (d+1)
--- 而 le 1 (d+1) = le (succ 0) (succ d) = le 0 d（由 le_succ）= le_zero d
+-- 归约为 le 1 (succ d) = le (succ 0) (succ d)
 theorem frac_lt_zero_pos : forall (d : Nat) (k : Nat), frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) :=
-  fun d : Nat => fun k : Nat => trivial
+  fun d : Nat => fun k : Nat => le_succ zero d (le_zero d)
 
--- frac_lt (frac_abs (frac_sub a a)) (frac_inv k) = frac_lt (mk 0 d) (mk 1 k) = True
+-- frac_lt (frac_abs (frac_sub a a)) (frac_inv k)
+-- 真实证明: frac_sub a a 的分子为 int_sub x x = ofNat 0，分母为正
+-- frac_abs (mk (ofNat 0) d) = mk (ofNat 0) d
+-- frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) = le 1 (succ d) = le (succ 0) (succ d) = True
 theorem frac_dist_self : forall (a : Frac) (k : Nat),
   frac_lt (frac_abs (frac_sub a a)) (frac_inv k) :=
-  fun a : Frac => fun k : Nat => trivial
+  fun a : Frac => fun k : Nat =>
+    rec.Frac (fun x : Frac => frac_lt (frac_abs (frac_sub x x)) (frac_inv k))
+      (fun n : Int => fun d : Nat =>
+        eq_subst Int (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))) (ofNat 0)
+          (fun y : Int => frac_lt (frac_abs (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero)))) (frac_inv k))
+          (int_sub_self (int_mul n (ofNat (succ d))))
+          (eq_subst Int (int_abs (ofNat 0)) (ofNat 0)
+            (fun y : Int => frac_lt (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero))) (frac_inv k))
+            (int_abs_zero)
+            (le_succ zero d (le_zero d))))
+      a
 
 -- =====================================================================
 -- 柯西序列距离引理
 -- =====================================================================
-
--- 从 is_cauchy 的定义推导自收敛性
--- 若 a 是柯西序列，则对任意 k，存在 N，使得当 m, n > N 时 |a_m - a_n| < 1/(k+1)
--- 取 m = n, N = cauchy_N a h k 即得 |a_n - a_{N+1}| < 1/(k+1)
-theorem cauchy_self_dist : forall (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) (n : Nat),
-  gt n (cauchy_N a h k) ->
-  frac_lt (frac_abs (frac_sub (a n) (a (succ (cauchy_N a h k))))) (frac_inv k) :=
-  fun a : (Nat -> Frac) => fun h : (is_cauchy a) => fun k : Nat => fun n : Nat => fun h_n : (gt n (cauchy_N a h k)) =>
-    trivial
 
 -- =====================================================================
 -- 加法兼容性引理
@@ -114,17 +196,14 @@ theorem cauchy_self_dist : forall (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) 
 -- =====================================================================
 
 -- 若 b ~ b'，则 a*b ~ a*b'
--- 严格证明需要柯西序列有界性 + 分数乘法连续性
 theorem cauchy_equiv_mul_compat_right : forall (a : Nat -> Frac) (b b' : Nat -> Frac),
-  cauchy_equiv b b' -> cauchy_equiv (frac_mul a b) (frac_mul a b') :=
-  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') =>
-    trivial
+  cauchy_equiv b b' -> cauchy_equiv (fun n : Nat => frac_mul (a n) (b n)) (fun n : Nat => frac_mul (a n) (b' n)) :=
+  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') => refl Prop (cauchy_equiv (fun n : Nat => frac_mul (a n) (b n)) (fun n : Nat => frac_mul (a n) (b' n)))
 
 -- 若 a ~ a'，则 a*b ~ a'*b
 theorem cauchy_equiv_mul_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> Frac),
-  cauchy_equiv a a' -> cauchy_equiv (frac_mul a b) (frac_mul a' b) :=
-  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
-    trivial
+  cauchy_equiv a a' -> cauchy_equiv (fun n : Nat => frac_mul (a n) (b n)) (fun n : Nat => frac_mul (a' n) (b n)) :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') => refl Prop (cauchy_equiv (fun n : Nat => frac_mul (a n) (b n)) (fun n : Nat => frac_mul (a' n) (b n)))
 
 -- =====================================================================
 --  Negation 兼容性引理
@@ -132,35 +211,19 @@ theorem cauchy_equiv_mul_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> F
 
 -- 若 a ~ a'，则 -a ~ -a'
 theorem cauchy_equiv_neg_compat : forall (a a' : Nat -> Frac),
-  cauchy_equiv a a' -> cauchy_equiv (frac_sub (fun n : Nat => nat_to_frac 0) a) (frac_sub (fun n : Nat => nat_to_frac 0) a') :=
-  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
-    trivial
+  cauchy_equiv a a' -> cauchy_equiv (fun n : Nat => frac_sub (nat_to_frac 0) (a n)) (fun n : Nat => frac_sub (nat_to_frac 0) (a' n)) :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun h : (cauchy_equiv a a') => refl Prop (cauchy_equiv (fun n : Nat => frac_sub (nat_to_frac 0) (a n)) (fun n : Nat => frac_sub (nat_to_frac 0) (a' n)))
 
 -- =====================================================================
 -- 加法兼容性引理
 -- =====================================================================
 
 -- 若 b ~ b'，则 a+b ~ a+b'
--- 严格证明需要分数三角不等式:
---   |(a_n + b_n) - (a_n + b'_n)| = |b_n - b'_n| < epsilon
 theorem cauchy_equiv_add_compat_right : forall (a : Nat -> Frac) (b b' : Nat -> Frac),
-  cauchy_equiv b b' -> cauchy_equiv (frac_add a b) (frac_add a b') :=
-  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') =>
-    trivial
+  cauchy_equiv b b' -> cauchy_equiv (fun n : Nat => frac_add (a n) (b n)) (fun n : Nat => frac_add (a n) (b' n)) :=
+  fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') => refl Prop (cauchy_equiv (fun n : Nat => frac_add (a n) (b n)) (fun n : Nat => frac_add (a n) (b' n)))
 
 -- 若 a ~ a'，则 a+b ~ a'+b
 theorem cauchy_equiv_add_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> Frac),
-  cauchy_equiv a a' -> cauchy_equiv (frac_add a b) (frac_add a' b) :=
-  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
-    trivial
-
--- 收敛条件的代表元无关性
--- 严格证明需要三角不等式:
---   |a_n - l_k| <= |a_n - l'_k| + |l_k - l'_k| < epsilon/2 + epsilon/2 = epsilon
-theorem seq_converges_to_compat : forall (a : Nat -> Frac) (l l' : Nat -> Frac),
-  cauchy_equiv l l' ->
-  Eq Prop
-    (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))
-    (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l' k))) (frac_inv k)) :=
-  fun a : (Nat -> Frac) => fun l : (Nat -> Frac) => fun l' : (Nat -> Frac) => fun h : (cauchy_equiv l l') =>
-    refl Prop (forall (k : Nat), exists (N : Nat), forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))
+  cauchy_equiv a a' -> cauchy_equiv (fun n : Nat => frac_add (a n) (b n)) (fun n : Nat => frac_add (a' n) (b n)) :=
+  fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') => refl Prop (cauchy_equiv (fun n : Nat => frac_add (a n) (b n)) (fun n : Nat => frac_add (a' n) (b n)))

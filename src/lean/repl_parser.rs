@@ -285,6 +285,11 @@ pub enum ParsedDecl {
         ty: ParsedExpr,
         fields: Vec<(String, ParsedExpr)>,
     },
+    /// Mutual inductive block: multiple inductive types that can reference each other
+    MutualInductive {
+        types: Vec<(String, ParsedExpr, Vec<(String, ParsedExpr)>, usize)>,
+        // (name, ty, ctors, num_params)
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +378,8 @@ impl Parser {
             self.parse_structure_decl()
         } else if self.starts_with_keyword("axiom") {
             self.parse_axiom_decl()
+        } else if self.starts_with_keyword("mutual") {
+            self.parse_mutual_inductive_decl()
         } else {
             Err(format!("Expected declaration, got {:?}", self.peek()))
         }
@@ -415,17 +422,18 @@ impl Parser {
 
     /// Parse the common body of def/theorem: params [: ret_ty] := value
     fn parse_decl_body(&mut self) -> Result<(Vec<(String, ParsedExpr)>, Option<ParsedExpr>, ParsedExpr), String> {
-        // Parse optional parameters: (x : T) or {x : T}
+        // Parse optional parameters: (x : T) or {x : T}, also (x y : T)
         let mut params = Vec::new();
         while self.peek() == Some('(') || self.peek() == Some('{') {
             let implicit = self.peek() == Some('{');
             self.advance(); // consume '(' or '{'
-            let pname = self.parse_ident_raw()?;
+            let mut names = vec![self.parse_ident_raw()?];
             self.skip_whitespace();
-            if self.peek() != Some(':') {
-                return Err("Expected ':' in parameter".to_string());
+            while self.peek() != Some(':') {
+                names.push(self.parse_ident_raw()?);
+                self.skip_whitespace();
             }
-            self.advance();
+            self.advance(); // consume ':'
             let pty = self.parse_pi_or_arrow()?;
             self.skip_whitespace();
             let close = if implicit { '}' } else { ')' };
@@ -433,7 +441,9 @@ impl Parser {
                 return Err(format!("Expected '{}'", close));
             }
             self.advance();
-            params.push((pname, pty));
+            for name in names {
+                params.push((name, pty.clone()));
+            }
             self.skip_whitespace();
         }
 
@@ -466,10 +476,11 @@ impl Parser {
         while self.peek() == Some('(') || self.peek() == Some('{') {
             let implicit = self.peek() == Some('{');
             self.advance();
-            let pname = self.parse_ident_raw()?;
+            let mut names = vec![self.parse_ident_raw()?];
             self.skip_whitespace();
-            if self.peek() != Some(':') {
-                return Err("Expected ':' in parameter".to_string());
+            while self.peek() != Some(':') {
+                names.push(self.parse_ident_raw()?);
+                self.skip_whitespace();
             }
             self.advance();
             let pty = self.parse_pi_or_arrow()?;
@@ -479,7 +490,9 @@ impl Parser {
                 return Err(format!("Expected '{}'", close));
             }
             self.advance();
-            params.push((pname, pty));
+            for name in names {
+                params.push((name, pty.clone()));
+            }
             self.skip_whitespace();
         }
 
@@ -541,6 +554,113 @@ impl Parser {
         }).collect();
 
         Ok(ParsedDecl::Inductive { name, ty: final_ty, ctors: final_ctors, num_params: params.len() })
+    }
+
+    fn parse_mutual_inductive_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(6); // consume "mutual"
+        self.skip_whitespace();
+
+        let mut types = Vec::new();
+        loop {
+            self.skip_whitespace_and_comments();
+            if self.starts_with_keyword("end") {
+                self.advance_by(3);
+                break;
+            }
+            if !self.starts_with_keyword("inductive") {
+                return Err("Expected 'inductive' or 'end' in mutual block".to_string());
+            }
+            self.advance_by(9); // consume "inductive"
+            self.skip_whitespace();
+            let name = self.parse_ident_raw()?;
+            self.skip_whitespace();
+
+            // Parse optional parameters
+            let mut params = Vec::new();
+            while self.peek() == Some('(') || self.peek() == Some('{') {
+                let implicit = self.peek() == Some('{');
+                self.advance();
+                let mut names = vec![self.parse_ident_raw()?];
+                self.skip_whitespace();
+                while self.peek() != Some(':') {
+                    names.push(self.parse_ident_raw()?);
+                    self.skip_whitespace();
+                }
+                self.advance();
+                let pty = self.parse_pi_or_arrow()?;
+                self.skip_whitespace();
+                let close = if implicit { '}' } else { ')' };
+                if self.peek() != Some(close) {
+                    return Err(format!("Expected '{}'", close));
+                }
+                self.advance();
+                for pname in names {
+                    params.push((pname, pty.clone()));
+                }
+                self.skip_whitespace();
+            }
+
+            // Return type
+            let ty = if self.peek() == Some(':') {
+                self.advance();
+                self.parse_pi_or_arrow()?
+            } else {
+                ParsedExpr::Sort(1)
+            };
+
+            self.skip_whitespace();
+            if !self.starts_with_keyword("where") {
+                return Err("Expected 'where' after inductive type in mutual block".to_string());
+            }
+            self.advance_by(5);
+            self.skip_whitespace();
+
+            // Parse constructors
+            let mut ctors = Vec::new();
+            loop {
+                self.skip_whitespace_and_comments();
+                if self.peek() != Some('|') {
+                    break;
+                }
+                self.advance();
+                self.skip_whitespace();
+                let ctor_name = self.parse_ident_raw()?;
+                self.skip_whitespace();
+                if self.peek() != Some(':') {
+                    return Err("Expected ':' in constructor".to_string());
+                }
+                self.advance();
+                let ctor_ty = self.parse_pi_or_arrow()?;
+                ctors.push((ctor_name, ctor_ty));
+            }
+
+            // Wrap constructor types with parameters
+            let final_ty = if params.is_empty() {
+                ty
+            } else {
+                let mut result = ty;
+                for (pname, pty) in params.iter().rev() {
+                    result = ParsedExpr::Pi(pname.clone(), Box::new(pty.clone()), Box::new(result));
+                }
+                result
+            };
+
+            let final_ctors = ctors.into_iter().map(|(n, t)| {
+                if params.is_empty() {
+                    (n, t)
+                } else {
+                    let mut ct = t;
+                    for (pname, pty) in params.iter().rev() {
+                        ct = ParsedExpr::Pi(pname.clone(), Box::new(pty.clone()), Box::new(ct));
+                    }
+                    (n, ct)
+                }
+            }).collect();
+
+            types.push((name, final_ty, final_ctors, params.len()));
+        }
+
+        Ok(ParsedDecl::MutualInductive { types })
     }
 
     fn parse_structure_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -826,7 +946,8 @@ impl Parser {
             if self.starts_with_keyword("in") || self.starts_with_keyword("with") || self.starts_with_keyword("where")
                 || self.starts_with_keyword("def") || self.starts_with_keyword("theorem")
                 || self.starts_with_keyword("inductive") || self.starts_with_keyword("structure") || self.starts_with_keyword("axiom")
-                || self.starts_with_keyword("postulate") || self.starts_with_keyword("module") {
+                || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
+                || self.starts_with_keyword("end") {
                 break;
             }
             atoms.push(self.parse_atom()?);
@@ -1079,22 +1200,30 @@ impl Parser {
         if self.peek() != Some('(') && self.peek() != Some('{') {
             return Err("Expected '(' or '{' after forall".to_string());
         }
-        let implicit = self.peek() == Some('{');
-        self.advance();
-        let name = self.parse_ident_raw()?;
-        self.skip_whitespace();
-        if self.peek() != Some(':') {
-            return Err("Expected ':' in forall binder".to_string());
-        }
-        self.advance();
-        let ty = self.parse_pi_or_arrow()?;
-        let close = if implicit { '}' } else { ')' };
-        if self.peek() != Some(close) {
-            return Err(format!("Expected '{}'", close));
-        }
-        self.advance();
 
-        self.skip_whitespace();
+        let mut binders = Vec::new();
+        while self.peek() == Some('(') || self.peek() == Some('{') {
+            let implicit = self.peek() == Some('{');
+            self.advance();
+            let mut names = vec![self.parse_ident_raw()?];
+            self.skip_whitespace();
+            while self.peek() != Some(':') {
+                names.push(self.parse_ident_raw()?);
+                self.skip_whitespace();
+            }
+            self.advance(); // consume ':'
+            let ty = self.parse_pi_or_arrow()?;
+            let close = if implicit { '}' } else { ')' };
+            if self.peek() != Some(close) {
+                return Err(format!("Expected '{}'", close));
+            }
+            self.advance();
+            for name in names {
+                binders.push((name, ty.clone()));
+            }
+            self.skip_whitespace();
+        }
+
         // Optional comma or arrow
         if self.peek() == Some(',') {
             self.advance();
@@ -1104,7 +1233,13 @@ impl Parser {
         }
 
         let body = self.parse_pi_or_arrow()?;
-        Ok(ParsedExpr::Pi(name, Box::new(ty), Box::new(body)))
+
+        // Nest Pi binders: forall (a b : A), B ~ forall (a : A), forall (b : A), B
+        let mut result = body;
+        for (name, ty) in binders.into_iter().rev() {
+            result = ParsedExpr::Pi(name, Box::new(ty), Box::new(result));
+        }
+        Ok(result)
     }
 
     /// Parse exists: exists (x : A), B  desugars to Exists A (\x : A . B)

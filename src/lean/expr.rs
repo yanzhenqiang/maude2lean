@@ -645,6 +645,57 @@ impl Expr {
             _ => false,
         }
     }
+
+    /// Strip the first `n` Pi binders and instantiate their bound variables with the given arguments.
+    /// Given `Pi(x1,T1, Pi(x2,T2, ... body))` and args `[a1, a2, ...]`,
+    /// returns `body[a1/x1][a2/x2]...`.
+    pub fn apply_pi_binders(&self, args: &[Expr]) -> Option<Expr> {
+        let mut result = self.clone();
+        for arg in args {
+            match result {
+                Expr::Pi(_, _, _, body) => {
+                    result = body.instantiate(arg);
+                }
+                _ => return None,
+            }
+        }
+        Some(result)
+    }
+
+    /// Replace all occurrences of `target` with `replacement` in this expression.
+    pub fn replace_expr(&self, target: &Expr, replacement: &Expr) -> Expr {
+        if self == target {
+            return replacement.clone();
+        }
+        match self {
+            Expr::App(f, a) => Expr::App(
+                Rc::new(f.replace_expr(target, replacement)),
+                Rc::new(a.replace_expr(target, replacement)),
+            ),
+            Expr::Lambda(name, bi, ty, body) => Expr::Lambda(
+                name.clone(),
+                *bi,
+                Rc::new(ty.replace_expr(target, replacement)),
+                Rc::new(body.replace_expr(target, replacement)),
+            ),
+            Expr::Pi(name, bi, ty, body) => Expr::Pi(
+                name.clone(),
+                *bi,
+                Rc::new(ty.replace_expr(target, replacement)),
+                Rc::new(body.replace_expr(target, replacement)),
+            ),
+            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
+                name.clone(),
+                Rc::new(ty.replace_expr(target, replacement)),
+                Rc::new(value.replace_expr(target, replacement)),
+                Rc::new(body.replace_expr(target, replacement)),
+                *nondep,
+            ),
+            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(e.replace_expr(target, replacement))),
+            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(e.replace_expr(target, replacement))),
+            _ => self.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

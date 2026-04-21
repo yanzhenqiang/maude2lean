@@ -32,6 +32,83 @@ pub struct Repl {
     env_bindings: HashMap<String, Expr>,
 }
 
+/// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
+/// inductive type being defined appears in `args`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NestedOccurrence {
+    outer_name: Name,
+    args: Vec<Expr>,
+}
+
+impl NestedOccurrence {
+    fn to_expr(&self) -> Expr {
+        let mut result = Expr::mk_const(self.outer_name.clone(), vec![]);
+        for arg in &self.args {
+            result = Expr::mk_app(result, arg.clone());
+        }
+        result
+    }
+}
+
+/// Find all nested occurrences of `ind_name` in `e`.
+/// A nested occurrence is when `ind_name` appears as an argument to another type constructor.
+fn find_nested_occurrences(e: &Expr, ind_name: &Name, out: &mut Vec<NestedOccurrence>) {
+    match e {
+        Expr::App(f, a) => {
+            // Check if this application spine has `ind_name` as an argument
+            let mut spine: Vec<Expr> = vec![(**a).clone()];
+            let mut head = f;
+            while let Expr::App(f2, a2) = head.as_ref() {
+                spine.push((**a2).clone());
+                head = f2;
+            }
+            spine.reverse();
+            if let Expr::Const(cname, _) = head.as_ref() {
+                if *cname != *ind_name && spine.iter().any(|arg| contains_const(arg, ind_name)) {
+                    out.push(NestedOccurrence {
+                        outer_name: cname.clone(),
+                        args: spine,
+                    });
+                    return; // Don't recurse into found occurrences
+                }
+            }
+            // Recurse into subexpressions
+            find_nested_occurrences(f, ind_name, out);
+            find_nested_occurrences(a, ind_name, out);
+        }
+        Expr::Lambda(_, _, ty, body) |
+        Expr::Pi(_, _, ty, body) => {
+            find_nested_occurrences(ty, ind_name, out);
+            find_nested_occurrences(body, ind_name, out);
+        }
+        Expr::Let(_, ty, value, body, _) => {
+            find_nested_occurrences(ty, ind_name, out);
+            find_nested_occurrences(value, ind_name, out);
+            find_nested_occurrences(body, ind_name, out);
+        }
+        Expr::MData(_, e) |
+        Expr::Proj(_, _, e) => {
+            find_nested_occurrences(e, ind_name, out);
+        }
+        _ => {}
+    }
+}
+
+fn contains_const(e: &Expr, name: &Name) -> bool {
+    match e {
+        Expr::Const(cname, _) => cname == name,
+        Expr::App(f, a) => contains_const(f, name) || contains_const(a, name),
+        Expr::Lambda(_, _, ty, body) |
+        Expr::Pi(_, _, ty, body) => contains_const(ty, name) || contains_const(body, name),
+        Expr::Let(_, ty, value, body, _) => {
+            contains_const(ty, name) || contains_const(value, name) || contains_const(body, name)
+        }
+        Expr::MData(_, e) |
+        Expr::Proj(_, _, e) => contains_const(e, name),
+        _ => false,
+    }
+}
+
 impl Repl {
     pub fn new() -> Self {
         let env = Environment::new();
@@ -41,10 +118,75 @@ impl Repl {
             tc_state,
             env_bindings: HashMap::new(),
         };
-        repl.load_nat();
-        repl.load_exists();
         repl.load_quot();
         repl
+    }
+
+    /// Generate an auxiliary inductive type for a nested occurrence.
+    /// Given `App(App(Const(C), arg1), arg2)` where one arg is the inductive type,
+    /// creates an inductive that mirrors `C` but with the inductive type fixed.
+    fn generate_aux_inductive(&self, occ: &NestedOccurrence, aux_name: &Name) -> Result<InductiveType, String> {
+        let info = self.env.find(&occ.outer_name)
+            .ok_or_else(|| format!("Nested type constructor not found: {}", occ.outer_name.to_string()))?;
+        let ind_val = info.to_inductive_val()
+            .ok_or_else(|| format!("Not an inductive type: {}", occ.outer_name.to_string()))?;
+
+        if occ.args.len() != ind_val.num_params as usize {
+            return Err(format!(
+                "Nested inductive {} applied to {} args but expects {}",
+                occ.outer_name.to_string(), occ.args.len(), ind_val.num_params
+            ));
+        }
+
+        let occ_expr = occ.to_expr();
+        let mut aux_ctors = Vec::new();
+
+        for ctor_name in &ind_val.ctors {
+            let ctor_info = self.env.find(ctor_name)
+                .ok_or_else(|| format!("Constructor not found: {}", ctor_name.to_string()))?;
+            let ctor_val = ctor_info.to_constructor_val()
+                .ok_or_else(|| format!("Not a constructor: {}", ctor_name.to_string()))?;
+
+            // Apply constructor type to the occurrence args (strip params)
+            let applied_ty = ctor_val.constant_val.ty.apply_pi_binders(&occ.args)
+                .ok_or_else(|| format!("Constructor {} has fewer parameters than expected", ctor_name.to_string()))?;
+
+            // Replace occurrence with auxiliary name
+            let replaced_ty = applied_ty.replace_expr(&occ_expr, &Expr::mk_const(aux_name.clone(), vec![]));
+
+            // Name the auxiliary constructor: aux_name.ctor_name
+            let full_ctor_name = aux_name.extend(&ctor_name.to_string());
+            aux_ctors.push(Constructor {
+                name: full_ctor_name,
+                ty: replaced_ty,
+            });
+        }
+
+        // The auxiliary type lives in Type
+        let aux_ty = Expr::Sort(Level::mk_succ(Level::Zero));
+
+        Ok(InductiveType {
+            name: aux_name.clone(),
+            ty: aux_ty,
+            ctors: aux_ctors,
+        })
+    }
+
+    pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
+        for filepath in files {
+            let contents = fs::read_to_string(filepath)
+                .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
+            let mut parser = ReplParser::new(&contents);
+            let decls = parser.parse_file()
+                .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
+
+            let count = decls.len();
+            for decl in decls {
+                self.process_decl(decl)?;
+            }
+            println!("  Loaded {} declarations from {}", count, filepath);
+        }
+        Ok(())
     }
 
     pub fn run(&mut self) {
@@ -54,14 +196,9 @@ impl Repl {
         println!("╚═══════════════════════════════════════════════════════════════════════╝");
         println!();
 
-        // Pre-populate with Nat, Exists, and axioms
-        println!("Pre-loaded: Nat (inductive), zero : Nat, succ : Nat → Nat");
-        println!("Pre-loaded: Exists (inductive), intro : Π(A : Type). Π(P : A → Prop). Π(w : A). P w → Exists A P");
-        println!("Pre-loaded: Eq (inductive), refl, propext, choice");
+        // Pre-populate with axioms only (Nat/Exists/Eq must be defined in .lean files)
+        println!("Pre-loaded: propext, choice");
         println!();
-        self.load_nat();
-        self.load_exists();
-        self.load_eq();
         self.load_axioms();
 
         loop {
@@ -200,17 +337,90 @@ impl Repl {
             }
             ParsedDecl::Inductive { name, ty, ctors, num_params } => {
                 let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                let ind_name = Name::new(&name);
                 let mut ctor_exprs = Vec::new();
-                for (ctor_name, ctor_ty) in ctors {
+                for (ctor_name, ctor_ty) in &ctors {
                     let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
                     ctor_exprs.push(Constructor {
-                        name: Name::new(&ctor_name),
+                        name: Name::new(ctor_name),
                         ty: ctor_ty_expr,
                     });
                 }
 
+                // Check for nested occurrences of the inductive type in constructor types
+                let mut nested = Vec::new();
+                for ctor in &ctor_exprs {
+                    find_nested_occurrences(&ctor.ty, &ind_name, &mut nested);
+                }
+
+                if !nested.is_empty() {
+                    // Generate auxiliary types for nested occurrences
+                    let mut aux_types = Vec::new();
+                    let mut replacements = Vec::new();
+                    let mut seen = std::collections::HashSet::new();
+
+                    for occ in nested {
+                        if !seen.insert(occ.clone()) {
+                            continue;
+                        }
+                        let aux_name = Name::new(&format!("{}_{}", name, occ.outer_name.to_string()));
+                        let aux_type = self.generate_aux_inductive(&occ, &aux_name)?;
+                        replacements.push((occ.to_expr(), Expr::mk_const(aux_name.clone(), vec![])));
+                        aux_types.push(aux_type);
+                    }
+
+                    // Replace nested occurrences in original constructor types
+                    let mut new_ctors = Vec::new();
+                    for ctor in ctor_exprs {
+                        let mut new_ty = ctor.ty;
+                        for (occ_expr, aux_expr) in &replacements {
+                            new_ty = new_ty.replace_expr(occ_expr, aux_expr);
+                        }
+                        new_ctors.push(Constructor {
+                            name: ctor.name,
+                            ty: new_ty,
+                        });
+                    }
+
+                    let ind = InductiveType {
+                        name: ind_name.clone(),
+                        ty: ty_expr,
+                        ctors: new_ctors,
+                    };
+
+                    let mut all_types = vec![ind];
+                    all_types.extend(aux_types);
+
+                    let decl = Declaration::Inductive {
+                        level_params: vec![],
+                        num_params: num_params as u64,
+                        types: all_types,
+                        is_unsafe: false,
+                    };
+
+                    self.env.add(decl).map_err(|e| e)?;
+                    self.tc_state = TypeCheckerState::new(self.env.clone());
+
+                    // Register constructors and recursors for all types
+                    for t in self.env.find(&ind_name).unwrap().to_inductive_val().unwrap().all.clone() {
+                        let info = self.env.find(&t).unwrap();
+                        if let Some(ind_val) = info.to_inductive_val() {
+                            for ctor_name in &ind_val.ctors {
+                                let cn = ctor_name.to_string();
+                                self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+                            }
+                        }
+                        self.env_bindings.insert(t.to_string(), Expr::mk_const(t.clone(), vec![]));
+                        let rec_name = format!("rec.{}", t.to_string());
+                        self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&t.to_string()), vec![]));
+                        println!("  Added inductive: {}", t.to_string());
+                    }
+                    return Ok(());
+                }
+
+                // No nested occurrences: process as simple inductive
                 let ind = InductiveType {
-                    name: Name::new(&name),
+                    name: ind_name.clone(),
                     ty: ty_expr,
                     ctors: ctor_exprs,
                 };
@@ -226,7 +436,7 @@ impl Repl {
                 self.tc_state = TypeCheckerState::new(self.env.clone());
 
                 // Register constructors and recursor in bindings
-                let info = self.env.find(&Name::new(&name)).unwrap();
+                let info = self.env.find(&ind_name).unwrap();
                 if let Some(ind_val) = info.to_inductive_val() {
                     for ctor_name in &ind_val.ctors {
                         let cn = ctor_name.to_string();
@@ -234,11 +444,61 @@ impl Repl {
                     }
                 }
 
-                self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
+                self.env_bindings.insert(name.clone(), Expr::mk_const(ind_name.clone(), vec![]));
                 let rec_name = format!("rec.{}", name);
                 self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
 
                 println!("  Added inductive: {}", name);
+                Ok(())
+            }
+            ParsedDecl::MutualInductive { types } => {
+                let mut inductive_types = Vec::new();
+                for (name, ty, ctors, _num_params) in &types {
+                    let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                    let mut ctor_exprs = Vec::new();
+                    for (ctor_name, ctor_ty) in ctors {
+                        let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                        // Use fully-qualified constructor names: Even.zero, Odd.succ, etc.
+                        let full_ctor_name = Name::new(name).extend(ctor_name);
+                        ctor_exprs.push(Constructor {
+                            name: full_ctor_name,
+                            ty: ctor_ty_expr,
+                        });
+                    }
+                    inductive_types.push(InductiveType {
+                        name: Name::new(name),
+                        ty: ty_expr,
+                        ctors: ctor_exprs,
+                    });
+                }
+
+                // All types in the mutual block share the same num_params (use max for safety)
+                let max_params = types.iter().map(|(_, _, _, np)| *np).max().unwrap_or(0) as u64;
+
+                let decl = Declaration::Inductive {
+                    level_params: vec![],
+                    num_params: max_params,
+                    types: inductive_types,
+                    is_unsafe: false,
+                };
+
+                self.env.add(decl).map_err(|e| e)?;
+                self.tc_state = TypeCheckerState::new(self.env.clone());
+
+                // Register constructors and recursors for all types
+                for (name, _, _, _) in &types {
+                    let info = self.env.find(&Name::new(name)).unwrap();
+                    if let Some(ind_val) = info.to_inductive_val() {
+                        for ctor_name in &ind_val.ctors {
+                            let cn = ctor_name.to_string();
+                            self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+                        }
+                    }
+                    self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(name), vec![]));
+                    let rec_name = format!("rec.{}", name);
+                    self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(name), vec![]));
+                    println!("  Added inductive: {}", name);
+                }
                 Ok(())
             }
             ParsedDecl::Structure { name, ty, fields } => {
@@ -246,7 +506,7 @@ impl Repl {
                 let struct_const = Expr::mk_const(Name::new(&name), vec![]);
 
                 // Build mk constructor type: field1 -> field2 -> ... -> Struct
-                let mut mk_ty = ParsedExpr::Ident(name.clone());
+                let mut mk_ty = ParsedExpr::Const(name.clone());
                 for (_fname, fty) in fields.iter().rev() {
                     mk_ty = ParsedExpr::Pi("_".to_string(), Box::new(fty.clone()), Box::new(mk_ty));
                 }
@@ -386,10 +646,12 @@ impl Repl {
                     target_expr = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(target_expr));
                 }
 
-                let mut engine = TacticEngine::new(&mut self.tc_state, &self.env, &self.env_bindings, target_expr);
+                let env = &self.env;
+                let env_bindings = &self.env_bindings;
+                let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
 
                 for tactic_cmd in tactics {
-                    self.execute_tactic(&mut engine, tactic_cmd)?;
+                    execute_tactic(env, env_bindings, &mut engine, tactic_cmd)?;
                 }
 
                 if engine.num_goals() > 0 {
@@ -460,96 +722,6 @@ impl Repl {
             println!("  Added definition: {}", name);
         }
         Ok(())
-    }
-
-    fn execute_tactic(&self, engine: &mut TacticEngine, cmd: &str) -> Result<(), String> {
-        let cmd = cmd.trim();
-        if cmd.is_empty() {
-            return Ok(());
-        }
-
-        let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
-        let tactic_name = parts[0];
-        let rest = parts.get(1).map(|s| s.trim()).unwrap_or("");
-
-        match tactic_name {
-            "intro" | "intros" => {
-                if rest.is_empty() {
-                    // Single anonymous intro
-                    engine.tactic_intro("_x")?;
-                } else {
-                    // Intro multiple names
-                    for name in rest.split_whitespace() {
-                        engine.tactic_intro(name)?;
-                    }
-                }
-                Ok(())
-            }
-            "exact" => {
-                if rest.is_empty() {
-                    return Err("exact requires an expression".to_string());
-                }
-                let expr = self.parse_and_convert(rest)?;
-                engine.tactic_exact(&expr)
-            }
-            "apply" => {
-                if rest.is_empty() {
-                    return Err("apply requires an expression".to_string());
-                }
-                let expr = self.parse_and_convert(rest)?;
-                engine.tactic_apply(&expr)
-            }
-            "refl" | "reflexivity" => {
-                engine.tactic_refl()
-            }
-            "assumption" => {
-                engine.tactic_assumption()
-            }
-            "rewrite" | "rw" => {
-                if rest.is_empty() {
-                    return Err("rewrite requires an equality hypothesis".to_string());
-                }
-                let expr = self.parse_and_convert(rest)?;
-                engine.tactic_rewrite(&expr)
-            }
-            "induction" => {
-                if rest.is_empty() {
-                    return Err("induction requires a variable name".to_string());
-                }
-                let var_name = rest.trim();
-                let var_expr = Expr::mk_fvar(Name::new(var_name));
-                engine.tactic_induction(&var_expr)
-            }
-            "have" => {
-                if rest.is_empty() {
-                    return Err("have requires name, type and proof".to_string());
-                }
-                // Parse: have name : type := proof
-                let have_rest = rest.trim();
-                let name_end = have_rest.find(|c: char| c == ':' || c == ' ')
-                    .unwrap_or(have_rest.len());
-                let name = have_rest[..name_end].trim().to_string();
-                let after_name = have_rest[name_end..].trim_start();
-
-                if !after_name.starts_with(':') {
-                    return Err("have syntax: have <name> : <type> := <proof>".to_string());
-                }
-                let after_colon = after_name[1..].trim_start();
-
-                let assign_pos = after_colon.find(":=");
-                if assign_pos.is_none() {
-                    return Err("have syntax: have <name> : <type> := <proof>".to_string());
-                }
-                let assign_pos = assign_pos.unwrap();
-                let ty_str = after_colon[..assign_pos].trim();
-                let proof_str = after_colon[assign_pos + 2..].trim();
-
-                let ty = self.parse_and_convert(ty_str)?;
-                let proof = self.parse_and_convert(proof_str)?;
-                engine.tactic_have(&name, &ty, &proof)
-            }
-            _ => Err(format!("Unknown tactic: {}", tactic_name)),
-        }
     }
 
     fn handle_axiom(&mut self, rest: &str) -> Result<(), String> {
@@ -979,6 +1151,106 @@ impl Repl {
         self.env_bindings.insert("Quot.lift".to_string(), Expr::mk_const(Name::new("Quot").extend("lift"), vec![]));
         self.env_bindings.insert("Quot.ind".to_string(), Expr::mk_const(Name::new("Quot").extend("ind"), vec![]));
         self.env_bindings.insert("Quot.sound".to_string(), Expr::mk_const(Name::new("Quot").extend("sound"), vec![]));
+    }
+}
+
+/// Parse an expression for tactic use (standalone to avoid borrow conflicts)
+fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, input: &str) -> Result<Expr, String> {
+    let mut parser = ReplParser::new(input);
+    let parsed = parser.parse_expr().map_err(|e| format!("parse error: {}", e))?;
+    Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
+}
+
+/// Execute a single tactic command (standalone to avoid borrow conflicts)
+fn execute_tactic(
+    env: &Environment,
+    env_bindings: &HashMap<String, Expr>,
+    engine: &mut TacticEngine,
+    cmd: &str,
+) -> Result<(), String> {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
+    let tactic_name = parts[0];
+    let rest = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+    match tactic_name {
+        "intro" | "intros" => {
+            if rest.is_empty() {
+                engine.tactic_intro("_x")?;
+            } else {
+                for name in rest.split_whitespace() {
+                    engine.tactic_intro(name)?;
+                }
+            }
+            Ok(())
+        }
+        "exact" => {
+            if rest.is_empty() {
+                return Err("exact requires an expression".to_string());
+            }
+            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            engine.tactic_exact(&expr)
+        }
+        "apply" => {
+            if rest.is_empty() {
+                return Err("apply requires an expression".to_string());
+            }
+            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            engine.tactic_apply(&expr)
+        }
+        "refl" | "reflexivity" => {
+            engine.tactic_refl()
+        }
+        "assumption" => {
+            engine.tactic_assumption()
+        }
+        "rewrite" | "rw" => {
+            if rest.is_empty() {
+                return Err("rewrite requires an equality hypothesis".to_string());
+            }
+            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            engine.tactic_rewrite(&expr)
+        }
+        "induction" => {
+            if rest.is_empty() {
+                return Err("induction requires a variable name".to_string());
+            }
+            let var_name = rest.trim();
+            let var_expr = Expr::mk_fvar(Name::new(var_name));
+            engine.tactic_induction(&var_expr)
+        }
+        "have" => {
+            if rest.is_empty() {
+                return Err("have requires name, type and proof".to_string());
+            }
+            let have_rest = rest.trim();
+            let name_end = have_rest.find(|c: char| c == ':' || c == ' ')
+                .unwrap_or(have_rest.len());
+            let name = have_rest[..name_end].trim().to_string();
+            let after_name = have_rest[name_end..].trim_start();
+
+            if !after_name.starts_with(':') {
+                return Err("have syntax: have <name> : <type> := <proof>".to_string());
+            }
+            let after_colon = after_name[1..].trim_start();
+
+            let assign_pos = after_colon.find(":=");
+            if assign_pos.is_none() {
+                return Err("have syntax: have <name> : <type> := <proof>".to_string());
+            }
+            let assign_pos = assign_pos.unwrap();
+            let ty_str = after_colon[..assign_pos].trim();
+            let proof_str = after_colon[assign_pos + 2..].trim();
+
+            let ty = parse_tactic_expr(env_bindings, env, ty_str)?;
+            let proof = parse_tactic_expr(env_bindings, env, proof_str)?;
+            engine.tactic_have(&name, &ty, &proof)
+        }
+        _ => Err(format!("Unknown tactic: {}", tactic_name)),
     }
 }
 

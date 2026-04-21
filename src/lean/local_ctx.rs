@@ -73,6 +73,11 @@ impl LocalDecl {
 pub struct LocalCtx {
     decls: HashMap<Name, LocalDecl>,
     next_index: u64,
+    /// Stack of binder names for BVar -> FVar conversion (index 0 = outermost)
+    bvar_names: Vec<Name>,
+    /// Stack of binder types for BVar lookup (index 0 = outermost)
+    /// Types are stored as FVar-based expressions
+    bvar_types: Vec<Expr>,
 }
 
 impl LocalCtx {
@@ -80,11 +85,92 @@ impl LocalCtx {
         LocalCtx {
             decls: HashMap::new(),
             next_index: 0,
+            bvar_names: Vec::new(),
+            bvar_types: Vec::new(),
         }
     }
 
     pub fn empty(&self) -> bool {
         self.decls.is_empty()
+    }
+
+    /// Convert a BVar index to the corresponding FVar name in the current context
+    fn bvar_to_fvar_name(&self, idx: u64) -> Option<Name> {
+        let len = self.bvar_names.len();
+        if idx as usize >= len {
+            return None;
+        }
+        self.bvar_names.get(len - 1 - idx as usize).cloned()
+    }
+
+    /// Replace BVars that refer to outer context binders with FVars.
+    /// BVars bound by nested Lambda/Pi/Let within `e` are left unchanged.
+    pub fn replace_bvars_with_fvars(&self, e: &Expr) -> Expr {
+        self.replace_bvars_with_fvars_depth(e, 0)
+    }
+
+    fn replace_bvars_with_fvars_depth(&self, e: &Expr, depth: u64) -> Expr {
+        match e {
+            Expr::BVar(i) => {
+                if *i >= depth {
+                    let adjusted = *i - depth;
+                    if let Some(name) = self.bvar_to_fvar_name(adjusted) {
+                        Expr::mk_fvar(name)
+                    } else {
+                        e.clone()
+                    }
+                } else {
+                    e.clone()
+                }
+            }
+            Expr::App(f, a) => Expr::App(
+                Rc::new(self.replace_bvars_with_fvars_depth(f, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(a, depth)),
+            ),
+            Expr::Lambda(name, bi, ty, body) => Expr::Lambda(
+                name.clone(),
+                *bi,
+                Rc::new(self.replace_bvars_with_fvars_depth(ty, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(body, depth + 1)),
+            ),
+            Expr::Pi(name, bi, ty, body) => Expr::Pi(
+                name.clone(),
+                *bi,
+                Rc::new(self.replace_bvars_with_fvars_depth(ty, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(body, depth + 1)),
+            ),
+            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
+                name.clone(),
+                Rc::new(self.replace_bvars_with_fvars_depth(ty, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(value, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(body, depth + 1)),
+                *nondep,
+            ),
+            _ => e.clone(),
+        }
+    }
+
+    /// Push a binder for BVar lookup. Converts BVars in `ty` to FVars using current context.
+    pub fn push_bvar(&mut self, name: Name, ty: Expr) {
+        let converted_ty = self.replace_bvars_with_fvars(&ty);
+        self.bvar_names.push(name);
+        self.bvar_types.push(converted_ty);
+    }
+
+    /// Pop the innermost binder
+    pub fn pop_bvar(&mut self) {
+        self.bvar_names.pop();
+        self.bvar_types.pop();
+    }
+
+    /// Get the type of a bound variable by de Bruijn index.
+    /// BVar(0) is the innermost binder.
+    pub fn get_bvar_type(&self, idx: u64) -> Option<&Expr> {
+        let len = self.bvar_types.len();
+        if idx as usize >= len {
+            return None;
+        }
+        self.bvar_types.get(len - 1 - idx as usize)
     }
 
     /// Add a cdecl (hypothesis)

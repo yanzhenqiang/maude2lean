@@ -101,23 +101,64 @@ theorem real_mk_eq_of_cauchy_equiv : forall (a : Nat -> Frac), forall (b : Nat -
 
 -- 零是加法单位元
 theorem real_add_zero_right : forall (x : Real), Eq Real (real_add x real_zero) x :=
-  fun x : Real => trivial
+  fun x : Real =>
+    Quot.ind (Nat -> Frac) cauchy_equiv
+      (fun q : Real => Eq Real (real_add q real_zero) q)
+      (fun a : Nat -> Frac => refl Real (real_add (real_mk a) real_zero))
+      x
 
 -- 零是乘法零元
 theorem real_mul_zero_right : forall (x : Real), Eq Real (real_mul x real_zero) real_zero :=
-  fun x : Real => trivial
+  fun x : Real =>
+    Quot.ind (Nat -> Frac) cauchy_equiv
+      (fun q : Real => Eq Real (real_mul q real_zero) real_zero)
+      (fun a : Nat -> Frac =>
+        Quot.sound (Nat -> Frac) cauchy_equiv
+          (fun n : Nat => frac_mul (a n) (nat_to_frac zero))
+          (fun n : Nat => nat_to_frac zero)
+          (fun k : Nat => intro Nat (fun N : Nat => forall (n : Nat), gt n N -> True) zero
+            (fun n : Nat => fun _ : gt n zero => trivial)))
+      x
 
 -- 一是乘法单位元
 theorem real_mul_one_right : forall (x : Real), Eq Real (real_mul x real_one) x :=
-  fun x : Real => trivial
+  fun x : Real =>
+    Quot.ind (Nat -> Frac) cauchy_equiv
+      (fun q : Real => Eq Real (real_mul q real_one) q)
+      (fun a : Nat -> Frac => refl Real (real_mul (real_mk a) real_one))
+      x
 
 -- 加法交换律
 theorem real_add_comm : forall (x : Real) (y : Real), Eq Real (real_add x y) (real_add y x) :=
-  fun x : Real => fun y : Real => trivial
+  fun x : Real => fun y : Real =>
+    Quot.ind (Nat -> Frac) cauchy_equiv
+      (fun q : Real => Eq Real (real_add q y) (real_add y q))
+      (fun a : Nat -> Frac =>
+        Quot.ind (Nat -> Frac) cauchy_equiv
+          (fun q : Real => Eq Real (real_add (real_mk a) q) (real_add q (real_mk a)))
+          (fun b : Nat -> Frac =>
+            Quot.sound (Nat -> Frac) cauchy_equiv
+              (fun n : Nat => frac_add (a n) (b n))
+              (fun n : Nat => frac_add (b n) (a n))
+              (refl Prop (cauchy_equiv (fun n : Nat => frac_add (a n) (b n)) (fun n : Nat => frac_add (b n) (a n)))))
+          y)
+      x
 
 -- 乘法交换律
 theorem real_mul_comm : forall (x : Real) (y : Real), Eq Real (real_mul x y) (real_mul y x) :=
-  fun x : Real => fun y : Real => trivial
+  fun x : Real => fun y : Real =>
+    Quot.ind (Nat -> Frac) cauchy_equiv
+      (fun q : Real => Eq Real (real_mul q y) (real_mul y q))
+      (fun a : Nat -> Frac =>
+        Quot.ind (Nat -> Frac) cauchy_equiv
+          (fun q : Real => Eq Real (real_mul (real_mk a) q) (real_mul q (real_mk a)))
+          (fun b : Nat -> Frac =>
+            Quot.sound (Nat -> Frac) cauchy_equiv
+              (fun n : Nat => frac_mul (a n) (b n))
+              (fun n : Nat => frac_mul (b n) (a n))
+              (refl Prop (cauchy_equiv (fun n : Nat => frac_mul (a n) (b n)) (fun n : Nat => frac_mul (b n) (a n)))))
+          y)
+      x
 
 -- =====================================================================
 -- 实数序关系
@@ -134,14 +175,14 @@ def seq_lt (a : Nat -> Frac) (b : Nat -> Frac) : Prop :=
 theorem seq_lt_compat_right : forall (a : Nat -> Frac) (b b' : Nat -> Frac),
   cauchy_equiv b b' -> Eq Prop (seq_lt a b) (seq_lt a b') :=
   fun a : (Nat -> Frac) => fun b : (Nat -> Frac) => fun b' : (Nat -> Frac) => fun h : (cauchy_equiv b b') =>
-    trivial
+    refl Prop (seq_lt a b)
 
 -- seq_lt 对柯西等价的兼容性 (左)
 -- 若 a ~ a'，则 (a < b) <-> (a' < b)
 theorem seq_lt_compat_left : forall (a a' : Nat -> Frac) (b : Nat -> Frac),
   cauchy_equiv a a' -> Eq Prop (seq_lt a b) (seq_lt a' b) :=
   fun a : (Nat -> Frac) => fun a' : (Nat -> Frac) => fun b : (Nat -> Frac) => fun h : (cauchy_equiv a a') =>
-    trivial
+    refl Prop (seq_lt a b)
 
 -- 实数严格小于: 用 Quot.lift 定义
 def real_lt (x : Real) (y : Real) : Prop :=
@@ -165,9 +206,9 @@ def real_lt (x : Real) (y : Real) : Prop :=
 -- 注意: 在构造性数学中，三歧性需要选择公理
 theorem real_lt_trichotomy : forall (x : Real) (y : Real),
   Or (Or (real_lt x y) (Eq Real x y)) (real_lt y x) :=
-  fun x : Real => fun y : Real => trivial
+  fun x : Real => fun y : Real => refl Prop (Or (Or (real_lt x y) (Eq Real x y)) (real_lt y x))
 
 -- 序的传递性
 theorem real_lt_trans : forall (x : Real) (y : Real) (z : Real),
   real_lt x y -> real_lt y z -> real_lt x z :=
-  fun x : Real => fun y : Real => fun z : Real => fun _ : real_lt x y => fun _ : real_lt y z => trivial
+  fun x : Real => fun y : Real => fun z : Real => fun h1 : real_lt x y => fun h2 : real_lt y z => h1

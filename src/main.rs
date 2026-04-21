@@ -14,6 +14,13 @@ fn main() {
         "repl" => {
             run_repl();
         }
+        "check-files" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} check-files <file1.lean> [file2.lean] ...", args[0]);
+                std::process::exit(1);
+            }
+            run_check_files(&args[2..]);
+        }
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             print_usage(&args[0]);
@@ -27,6 +34,7 @@ fn print_usage(prog: &str) {
     eprintln!("Commands:");
     eprintln!("  lean-check                   Run Lean kernel type checker tests");
     eprintln!("  repl                         Start interactive Lean REPL");
+    eprintln!("  check-files <file>...        Batch check .lean files");
 }
 
 fn run_repl() {
@@ -195,6 +203,17 @@ fn run_lean_check() {
     println!("\n╔{}╗", line);
     println!("║{:^71}║", "演示完成 — 所有符号执行步骤通过");
     println!("╚{}╝", line);
+}
+
+fn run_check_files(files: &[String]) {
+    let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    match repl.check_files(&files.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+        Ok(()) => println!("OK"),
+        Err(e) => {
+            eprintln!("FAIL: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn format_expr(e: &lean_cauchy_kernel::lean::expr::Expr) -> String {

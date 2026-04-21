@@ -1,3 +1,7 @@
+inductive Nat where
+| zero : Nat
+| succ : Nat -> Nat
+
 def nat_add (m : Nat) (n : Nat) : Nat :=
   rec.Nat (fun _ => Nat) n (\m' : Nat . \ih : Nat . succ ih) m
 

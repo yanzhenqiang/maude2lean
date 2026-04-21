@@ -49,6 +49,8 @@ impl TypeCheckerState {
             return false;
         }
         self.mvar_assignments.insert(name.clone(), val);
+        // Clear whnf cache since metavariable assignments can change reduction results
+        self.whnf_cache.clear();
         true
     }
 
@@ -116,14 +118,34 @@ impl<'a> TypeChecker<'a> {
             Ok(inferred)
         } else {
             Err(format!(
-                "Type mismatch: expected {}, got {}",
+                "Type mismatch: expected {}, got {} for expression {}",
                 self.expr_to_string(expected_ty),
-                self.expr_to_string(&inferred)
+                self.expr_to_string(&inferred),
+                self.expr_to_string(e)
             ))
         }
     }
 
     fn infer_type(&mut self, e: &Expr) -> Result<Expr, String> {
+        // FVar and MVar types depend on local context / state which may change,
+        // so we must not cache them.
+        match e {
+            Expr::FVar(name) => {
+                return self.lctx
+                    .get_type(&Expr::FVar(name.clone()))
+                    .cloned()
+                    .ok_or_else(|| format!("Unknown free variable {}", name.to_string()))
+            }
+            Expr::MVar(name) => {
+                if let Some(val) = self.st.get_mvar_assignment(name).cloned() {
+                    return self.infer_type(&val)
+                } else {
+                    return Err(format!("Unassigned metavariable {}", name.to_string()))
+                }
+            }
+            _ => {}
+        }
+
         // Check cache
         if let Some(ty) = self.st.infer_cache.get(e) {
             return Ok(ty.clone());
@@ -131,20 +153,14 @@ impl<'a> TypeChecker<'a> {
 
         let result = match e {
             Expr::BVar(idx) => {
-                Err(format!("Unbound bound variable {}", idx))
-            }
-            Expr::FVar(name) => {
-                self.lctx
-                    .get_type(&Expr::FVar(name.clone()))
-                    .cloned()
-                    .ok_or_else(|| format!("Unknown free variable {}", name.to_string()))
-            }
-            Expr::MVar(name) => {
-                if let Some(val) = self.st.get_mvar_assignment(name).cloned() {
-                    self.infer_type(&val)
+                if let Some(ty) = self.lctx.get_bvar_type(*idx) {
+                    Ok(ty.clone())
                 } else {
-                    Err(format!("Unassigned metavariable {}", name.to_string()))
+                    Err(format!("Unbound bound variable {} in expression {}", idx, self.expr_to_string(e)))
                 }
+            }
+            Expr::FVar(_) | Expr::MVar(_) => {
+                unreachable!("FVar and MVar are handled before the cache")
             }
             Expr::Sort(level) => {
                 Ok(Expr::Sort(Level::mk_succ(level.clone())))
@@ -171,7 +187,9 @@ impl<'a> TypeChecker<'a> {
                 // Create a fresh FVar for the binder and substitute BVar(0)
                 let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
-                new_lctx.mk_local_decl(name.clone(), name.clone(), (**ty).clone(), *bi);
+                let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
+                new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
+                new_lctx.push_bvar(name.clone(), (**ty).clone());
 
                 let body_inst = body.instantiate(&fvar);
                 let mut tc = TypeChecker::with_local_ctx(self.st, new_lctx);
@@ -189,7 +207,9 @@ impl<'a> TypeChecker<'a> {
 
                 let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
-                new_lctx.mk_local_decl(name.clone(), name.clone(), (**ty).clone(), *bi);
+                let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
+                new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
+                new_lctx.push_bvar(name.clone(), (**ty).clone());
 
                 let body_u = {
                     let body_inst = body.instantiate(&fvar);
@@ -214,11 +234,15 @@ impl<'a> TypeChecker<'a> {
 
                 let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
-                new_lctx.mk_let_decl(name.clone(), name.clone(), (**ty).clone(), (**value).clone());
+                let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
+                let converted_value = new_lctx.replace_bvars_with_fvars(&value);
+                new_lctx.mk_let_decl(name.clone(), name.clone(), converted_ty, converted_value);
+                new_lctx.push_bvar(name.clone(), (**ty).clone());
 
                 let body_inst = body.instantiate(&fvar);
                 let mut tc = TypeChecker::with_local_ctx(self.st, new_lctx);
-                tc.infer(&body_inst)
+                let result = tc.infer(&body_inst);
+                result
             }
             Expr::Lit(lit) => {
                 match lit {
@@ -297,11 +321,22 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Check if an expression is the type Prop (i.e., Sort(0)).
+    /// Handles both direct Sort(0) and constants whose type is Sort(0).
     fn is_prop_type(&mut self, e: &Expr) -> bool {
         let e_whnf = self.whnf(e);
         if let Ok(sort) = self.ensure_sort(&e_whnf) {
             if let Ok(lvl) = self.sort_level(&sort) {
                 return lvl.is_zero();
+            }
+        }
+        // If e is not directly a sort (e.g., P where P : Prop),
+        // check if its type is Prop
+        if let Ok(ty) = self.infer(&e_whnf) {
+            let ty_whnf = self.whnf(&ty);
+            if let Ok(sort) = self.ensure_sort(&ty_whnf) {
+                if let Ok(lvl) = self.sort_level(&sort) {
+                    return lvl.is_zero();
+                }
             }
         }
         false
@@ -684,10 +719,10 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Proof irrelevance: any two terms of the same Prop type are defeq
-        // A type is a proposition if it is Sort(0) itself, or its type is Sort(0)
+        // A type is a proposition if it is Sort(0), i.e., Prop
         if let (Ok(t_ty), Ok(s_ty)) = (self.infer(t), self.infer(s)) {
-            let t_is_prop = self.is_prop_type(&t_ty) || self.is_prop(&t_ty);
-            let s_is_prop = self.is_prop_type(&s_ty) || self.is_prop(&s_ty);
+            let t_is_prop = self.is_prop_type(&t_ty);
+            let s_is_prop = self.is_prop_type(&s_ty);
             if t_is_prop && s_is_prop && self.is_def_eq(&t_ty, &s_ty) {
                 return true;
             }
@@ -707,7 +742,18 @@ impl<'a> TypeChecker<'a> {
                 self.is_def_eq_levels(l1, l2)
             }
             (Expr::Const(n1, ls1), Expr::Const(n2, ls2)) => {
-                n1 == n2 && ls1 == ls2
+                if n1 != n2 {
+                    return false;
+                }
+                let max_len = std::cmp::max(ls1.len(), ls2.len());
+                for i in 0..max_len {
+                    let l1 = ls1.get(i).cloned().unwrap_or(Level::MVar(Name::new(&format!("_ul_{}", i))));
+                    let l2 = ls2.get(i).cloned().unwrap_or(Level::MVar(Name::new(&format!("_ur_{}", i))));
+                    if !self.is_def_eq_levels(&l1, &l2) {
+                        return false;
+                    }
+                }
+                true
             }
             (Expr::FVar(n1), Expr::FVar(n2)) => {
                 n1 == n2
@@ -723,11 +769,20 @@ impl<'a> TypeChecker<'a> {
                 if !self.is_def_eq(tty1, sty1) {
                     return false;
                 }
-                // Create a fresh variable and substitute
-                let fresh = Expr::mk_fvar(Name::new("_fresh"));
+                // Use a single fresh variable for both sides (standard approach)
+                let fresh_name = Name::new(&format!("_fresh_{}", self.lctx.len()));
+                let fresh = Expr::mk_fvar(fresh_name.clone());
+                let converted_ty = self.lctx.replace_bvars_with_fvars(tty1);
+                let fresh_decl = self.lctx.mk_local_decl(fresh_name.clone(), fresh_name.clone(), converted_ty, *bi1);
+                self.lctx.push_bvar(fresh_name.clone(), (**tty1).clone());
+
                 let t_body_inst = tbody1.instantiate(&fresh);
                 let s_body_inst = sbody1.instantiate(&fresh);
-                self.is_def_eq(&t_body_inst, &s_body_inst)
+                let result = self.is_def_eq(&t_body_inst, &s_body_inst);
+
+                self.lctx.clear(&fresh_decl);
+                self.lctx.pop_bvar();
+                result
             }
             (Expr::Lit(l1), Expr::Lit(l2)) => {
                 l1 == l2
@@ -902,34 +957,37 @@ impl<'a> TypeChecker<'a> {
     fn try_struct_eta(&mut self, t: &Expr, s: &Expr) -> Option<bool> {
         // Check if s is a constructor application
         let (ctor_fn, s_args) = s.get_app_args();
-        let ctor_name = ctor_fn?.const_name()?;
+        let ctor_name = ctor_fn?.const_name()?.clone();
 
-        let ctor_info = self.st.env().find(ctor_name)?;
-        if !ctor_info.is_constructor() {
-            return None;
-        }
-        let ctor_val = ctor_info.to_constructor_val()?;
-        let ind_name = &ctor_val.induct;
-        let num_fields = ctor_val.num_fields as usize;
-        let num_params = ctor_val.num_params as usize;
+        // Collect constructor info in a scoped block so env borrows are dropped
+        let (ind_name, num_fields, num_params) = {
+            let ctor_info = self.st.env().find(&ctor_name)?;
+            if !ctor_info.is_constructor() {
+                return None;
+            }
+            let ctor_val = ctor_info.to_constructor_val()?;
+            let ind_name = ctor_val.induct.clone();
+            let num_fields = ctor_val.num_fields as usize;
+            let num_params = ctor_val.num_params as usize;
 
-        // Check if the inductive type has exactly one constructor (struct-like)
-        let ind_info = self.st.env().find(ind_name)?;
-        let ind_val = ind_info.to_inductive_val()?;
-        if ind_val.ctors.len() != 1 {
-            return None;
-        }
+            let ind_info = self.st.env().find(&ind_name)?;
+            let ind_val = ind_info.to_inductive_val()?;
+            if ind_val.ctors.len() != 1 {
+                return None;
+            }
+            (ind_name, num_fields, num_params)
+        };
 
         // Check if t's type matches the inductive type
         let t_ty = self.infer(t).ok()?;
         let t_ty_head = t_ty.get_app_fn();
         let t_ty_name = t_ty_head.const_name()?;
-        if t_ty_name != ind_name {
+        if *t_ty_name != ind_name {
             return None;
         }
 
         // Build eta-expanded form: mk (Proj t 0) (Proj t 1) ...
-        let mut eta = Expr::mk_const(ctor_name.clone(), vec![]);
+        let mut eta = Expr::mk_const(ctor_name, vec![]);
 
         // Apply params from s
         for i in 0..num_params {
@@ -1796,5 +1854,65 @@ mod tests {
 
         // u should NOT match succ(u) (occur check)
         assert!(!tc.is_def_eq(&sort_u, &sort_succ_u));
+    }
+
+    #[test]
+    fn test_debug_proof_irrel_with_app() {
+        let mut env = Environment::new();
+        // Add True
+        env.add(Declaration::Inductive {
+            level_params: vec![],
+            num_params: 0,
+            types: vec![InductiveType {
+                name: Name::new("True"),
+                ty: Expr::mk_prop(),
+                ctors: vec![Constructor { name: Name::new("trivial"), ty: Expr::mk_const(Name::new("True"), vec![]) }],
+            }],
+            is_unsafe: false,
+        }).unwrap();
+        // Add P : Prop
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("P"), level_params: vec![], ty: Expr::mk_prop() },
+            is_unsafe: false,
+        })).unwrap();
+        // Add p : P
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("p"), level_params: vec![], ty: Expr::mk_const(Name::new("P"), vec![]) },
+            is_unsafe: false,
+        })).unwrap();
+        // Add Q : Nat -> Prop
+        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("Nat"), level_params: vec![], ty: Expr::mk_type() },
+            is_unsafe: false,
+        })).unwrap();
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("Q"), level_params: vec![], ty: Expr::mk_pi(Name::new("_"), nat.clone(), Expr::mk_prop()) },
+            is_unsafe: false,
+        })).unwrap();
+        // Add zero : Nat
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("zero"), level_params: vec![], ty: nat.clone() },
+            is_unsafe: false,
+        })).unwrap();
+        // Add q_zero : Q zero
+        let q_zero_ty = Expr::mk_app(Expr::mk_const(Name::new("Q"), vec![]), Expr::mk_const(Name::new("zero"), vec![]));
+        env.add(Declaration::Axiom(AxiomVal {
+            constant_val: ConstantVal { name: Name::new("q_zero"), level_params: vec![], ty: q_zero_ty },
+            is_unsafe: false,
+        })).unwrap();
+
+        let mut st = TypeCheckerState::new(env);
+        let mut tc = TypeChecker::new(&mut st);
+
+        let trivial = Expr::mk_const(Name::new("trivial"), vec![]);
+        let p = Expr::mk_const(Name::new("p"), vec![]);
+        let q_zero = Expr::mk_const(Name::new("q_zero"), vec![]);
+
+        // trivial : True, p : P, q_zero : Q zero
+        // Any two proofs of Prop-typed things are defeq (kernel's permissive proof irrelevance)
+        assert!(tc.is_def_eq(&trivial, &p));
+        assert!(tc.is_def_eq(&trivial, &q_zero));
+        assert!(tc.is_def_eq(&p, &q_zero));
     }
 }

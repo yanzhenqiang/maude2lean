@@ -147,17 +147,25 @@ impl<'a> TacticEngine<'a> {
 
     /// Introduce a variable from a Pi target
     pub fn tactic_intro(&mut self, name: &str) -> Result<(), String> {
-        let goal = self.current_goal_mut().ok_or("No goals remaining")?;
-        let target = goal.target.clone();
+        let target;
+        let lctx;
+        {
+            let goal = self.current_goal_mut().ok_or("No goals remaining")?;
+            target = goal.target.clone();
+            lctx = goal.lctx.clone();
+        }
 
         // WHNF the target to expose Pi
-        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-        let target_whnf = tc.whnf(&target);
+        let target_whnf = {
+            let mut tc = TypeChecker::with_local_ctx(self.st, lctx.clone());
+            tc.whnf(&target)
+        };
 
         match &target_whnf {
             Expr::Pi(_, _, dom, body) => {
                 let fvar_name = Name::new(name);
                 let fvar = Expr::mk_fvar(fvar_name.clone());
+                let goal = self.current_goal_mut().ok_or("No goals remaining")?;
                 goal.lctx.mk_local_decl(fvar_name.clone(), Name::new(name), (**dom).clone(), BinderInfo::Default);
 
                 // New target is the body with the bound var replaced by FVar
@@ -183,108 +191,133 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        // Build lambda abstraction over local context
+        // Close proof over local context
         let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
         let closed_proof = goal.lctx.mk_lambda(&fvars, proof.clone(), true);
         self.assign_mvar(&goal.mvar, closed_proof);
+
         Ok(())
     }
 
-    /// Apply a theorem/lemma, generating subgoals for its premises
-    pub fn tactic_apply(&mut self, expr: &Expr) -> Result<(), String> {
+    /// Apply a function to the current goal
+    pub fn tactic_apply(&mut self, fn_expr: &Expr) -> Result<(), String> {
         let goal = self.current_goal().ok_or("No goals remaining")?;
-        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-        let expr_ty = tc.infer(expr).map_err(|e| format!("tactic_apply: {}", e))?;
+        let target = goal.target.clone();
 
-        // Collect premises and conclusion
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let fn_ty = tc.infer(fn_expr)
+            .map_err(|e| format!("tactic_apply: cannot infer function type: {}", e))?;
+
+        // Decompose function type into premises and conclusion
         let mut premises = Vec::new();
-        let mut conclusion = expr_ty.clone();
-        let mut apply_fresh_idx = 0;
+        let mut current_ty = fn_ty;
         loop {
-            let c_whnf = tc.whnf(&conclusion);
-            match &c_whnf {
-                Expr::Pi(_, _, dom, body) => {
-                    premises.push((**dom).clone());
-                    let fresh = Expr::mk_fvar(Name::new(&format!("_fresh_apply_{}", apply_fresh_idx)));
-                    apply_fresh_idx += 1;
-                    conclusion = body.instantiate(&fresh);
+            let whnf_ty = tc.whnf(&current_ty);
+            match &whnf_ty {
+                Expr::Pi(name, bi, dom, body) => {
+                    premises.push((name.clone(), *bi, (**dom).clone()));
+                    current_ty = (**body).clone();
                 }
                 _ => break,
             }
         }
 
-        // Check conclusion matches goal
-        if !tc.is_def_eq(&conclusion, &goal.target) {
+        // Check conclusion matches target
+        if !tc.is_def_eq(&current_ty, &target) {
             return Err(format!(
                 "tactic_apply: conclusion {} does not match goal {}",
-                format_expr(&conclusion),
-                format_expr(&goal.target)
+                format_expr(&current_ty),
+                format_expr(&target)
             ));
         }
 
-        // Pop the current goal
+        // Pop current goal
         let goal = self.pop_goal().unwrap();
 
-        // Create subgoals for each premise (in reverse order so first premise is current)
-        let mut apply_args = Vec::new();
-        for premise in premises.iter().rev() {
-            let mvar = self.push_goal(premise.clone());
-            apply_args.push(Expr::mk_mvar(mvar));
+        // Create subgoals for each premise (reversed so the first premise is the current goal)
+        let mut subgoal_mvars: Vec<Expr> = Vec::new();
+        for (idx, (name, bi, dom)) in premises.iter().enumerate().rev() {
+            let mvar_name = self.push_goal(dom.clone());
+
+            // Create a lambda for the proof term
+            let mvar_expr = Expr::mk_mvar(mvar_name.clone());
+
+            // Build the application
+            let mut applied = if idx == premises.len() - 1 {
+                fn_expr.clone()
+            } else {
+                subgoal_mvars.last().unwrap().clone()
+            };
+
+            applied = Expr::mk_app(applied, mvar_expr.clone());
+            subgoal_mvars.push(applied);
         }
 
-        // Build the application: expr arg1 arg2 ...
-        let mut applied = expr.clone();
-        for arg in apply_args.iter().rev() {
-            applied = Expr::mk_app(applied, arg.clone());
-        }
+        // Build the final proof term
+        let proof = if subgoal_mvars.is_empty() {
+            fn_expr.clone()
+        } else {
+            subgoal_mvars.last().unwrap().clone()
+        };
 
         // Close over local context
         let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, applied, true);
+        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
         self.assign_mvar(&goal.mvar, closed_proof);
 
         Ok(())
     }
 
-    /// Apply reflexivity: exact (refl _ _)
+    /// Try to solve goal by reflexivity (Eq A a a)
     pub fn tactic_refl(&mut self) -> Result<(), String> {
-        let goal = self.current_goal().ok_or("No goals remaining")?;
+        let goal = self.pop_goal().ok_or("No goals remaining")?;
         let target = goal.target.clone();
 
         let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
         let target_whnf = tc.whnf(&target);
 
-        // Check if target is Eq A a a
         let (eq_head, eq_args) = target_whnf.get_app_args();
         let eq_const = eq_head.and_then(|h| h.const_name()).cloned();
-
         if eq_const != Some(Name::new("Eq")) || eq_args.len() != 3 {
-            return Err(format!("tactic_refl: target is not an equality: {}", format_expr(&target_whnf)));
+            return Err(format!("tactic_refl: goal is not an equality: {}", format_expr(&target_whnf)));
         }
 
-        let a_type = &eq_args[0];
-        let a = &eq_args[1];
-        let b = &eq_args[2];
+        let a_type = eq_args[0].clone();
+        let a = eq_args[1].clone();
+        let b = eq_args[2].clone();
 
-        if !tc.is_def_eq(a, b) {
+        if !tc.is_def_eq(&a, &b) {
             return Err(format!(
-                "tactic_refl: terms are not definitionally equal: {} vs {}",
-                format_expr(a),
-                format_expr(b)
+                "tactic_refl: terms are not definitionally equal: {} != {}",
+                format_expr(&a),
+                format_expr(&b)
             ));
         }
 
-        let refl = Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("refl"), vec![]), a_type.clone()), a.clone());
-        self.tactic_exact(&refl)
+        // Build refl proof: refl A a
+        let proof = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_const(Name::new("refl"), vec![]),
+                a_type,
+            ),
+            a,
+        );
+
+        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
+        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
+        self.assign_mvar(&goal.mvar, closed_proof);
+
+        Ok(())
     }
 
     /// Try to solve current goal from assumptions in local context
     pub fn tactic_assumption(&mut self) -> Result<(), String> {
         let goal = self.current_goal().ok_or("No goals remaining")?;
         let target = goal.target.clone();
+        // Collect fvars first to avoid iterator holding a borrow
+        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
 
-        for decl in goal.lctx.iter_decls() {
-            let fvar = decl.mk_ref();
+        for fvar in fvars {
             if let Ok(ty) = self.infer_in_goal(&fvar) {
                 if self.is_def_eq_in_goal(&ty, &target) {
                     return self.tactic_exact(&fvar);
@@ -305,11 +338,16 @@ impl<'a> TacticEngine<'a> {
             _ => return Err("induction: expected a variable".to_string()),
         };
 
-        // Infer the type of the variable
-        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-        let var_ty = tc.infer(var_expr)
-            .map_err(|e| format!("induction: cannot infer type: {}", e))?;
-        let var_ty_whnf = tc.whnf(&var_ty);
+        let goal_lctx = goal.lctx.clone();
+
+        // Phase 1: Infer variable type (tc scope limited)
+        let (var_ty, var_ty_whnf) = {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal_lctx.clone());
+            let var_ty = tc.infer(var_expr)
+                .map_err(|e| format!("induction: cannot infer type: {}", e))?;
+            let var_ty_whnf = tc.whnf(&var_ty);
+            (var_ty, var_ty_whnf)
+        };
 
         // Get the inductive type name and arguments
         let (ind_name, ind_args) = {
@@ -344,62 +382,67 @@ impl<'a> TacticEngine<'a> {
         let goal = self.pop_goal().unwrap();
         let target = goal.target.clone();
 
-        // Determine universe level from target sort
-        let target_sort = tc.infer(&target)
-            .map_err(|e| format!("induction: cannot infer target sort: {}", e))?;
-        let target_sort_whnf = tc.whnf(&target_sort);
-        let u_level = match &target_sort_whnf {
-            Expr::Sort(l) => l.clone(),
-            _ => Level::Zero,
-        };
+        // Phase 2: Build proof using tc, then drop it before push_goal
+        let minor_types = {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
 
-        // Build motive: λ x. target[x/var]
-        let motive = Expr::Lambda(
-            var_name.clone(),
-            BinderInfo::Default,
-            Rc::new(var_ty.clone()),
-            Rc::new(target.abstract_fvar(&var_name, 0)),
-        );
+            // Determine universe level from target sort
+            let target_sort = tc.infer(&target)
+                .map_err(|e| format!("induction: cannot infer target sort: {}", e))?;
+            let target_sort_whnf = tc.whnf(&target_sort);
+            let u_level = match &target_sort_whnf {
+                Expr::Sort(l) => l.clone(),
+                _ => Level::Zero,
+            };
 
-        // Build recursor constant with universe level
-        let rec_levels = if rec_val.constant_val.level_params.len() == 1 {
-            vec![u_level.clone()]
-        } else {
-            // For now, only handle single level param recursors
-            vec![u_level.clone()]
-        };
-        let mut proof = Expr::mk_const(rec_name.clone(), rec_levels);
+            // Build motive: λ x. target[x/var]
+            let motive = Expr::Lambda(
+                var_name.clone(),
+                BinderInfo::Default,
+                Rc::new(var_ty),
+                Rc::new(target.abstract_fvar(&var_name, 0)),
+            );
 
-        // Apply params
-        for i in 0..num_params as usize {
-            if i < ind_args.len() {
-                proof = Expr::mk_app(proof, ind_args[i].clone());
-            }
-        }
+            // Build recursor constant with universe level
+            let rec_levels = if rec_val.constant_val.level_params.len() == 1 {
+                vec![u_level.clone()]
+            } else {
+                vec![u_level.clone()]
+            };
+            let mut proof = Expr::mk_const(rec_name.clone(), rec_levels);
 
-        // Apply motive
-        proof = Expr::mk_app(proof, motive.clone());
-
-        // Infer type of partial application to get minor premise types
-        let partial_ty = tc.infer(&proof)
-            .map_err(|e| format!("induction: cannot infer recursor type: {}", e))?;
-
-        // Collect minor premise types from the Pi chain
-        let mut minor_types = Vec::new();
-        let mut current_ty = partial_ty;
-        for _ in 0..num_minors {
-            let c_whnf = tc.whnf(&current_ty);
-            match &c_whnf {
-                Expr::Pi(_, _, dom, body) => {
-                    minor_types.push((**dom).clone());
-                    current_ty = (**body).clone();
+            // Apply params
+            for i in 0..num_params as usize {
+                if i < ind_args.len() {
+                    proof = Expr::mk_app(proof, ind_args[i].clone());
                 }
-                _ => return Err(format!(
-                    "induction: recursor type does not have enough minor premises. Got: {}",
-                    format_expr(&c_whnf)
-                )),
             }
-        }
+
+            // Apply motive
+            proof = Expr::mk_app(proof, motive.clone());
+
+            // Infer type of partial application to get minor premise types
+            let partial_ty = tc.infer(&proof)
+                .map_err(|e| format!("induction: cannot infer recursor type: {}", e))?;
+
+            // Collect minor premise types from the Pi chain
+            let mut minor_types = Vec::new();
+            let mut current_ty = partial_ty;
+            for _ in 0..num_minors {
+                let c_whnf = tc.whnf(&current_ty);
+                match &c_whnf {
+                    Expr::Pi(_, _, dom, body) => {
+                        minor_types.push((**dom).clone());
+                        current_ty = (**body).clone();
+                    }
+                    _ => return Err(format!(
+                        "induction: recursor type does not have enough minor premises. Got: {}",
+                        format_expr(&c_whnf)
+                    )),
+                }
+            }
+            minor_types
+        }; // tc dropped here
 
         // Create subgoals for each minor premise (in reverse so first is current)
         let mut minor_mvars = Vec::new();
@@ -408,7 +451,35 @@ impl<'a> TacticEngine<'a> {
             minor_mvars.push(Expr::mk_mvar(mvar_name));
         }
 
-        // Apply minor premises to proof
+        // Reconstruct the proof term
+        let u_level = {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+            let target_sort = tc.infer(&target).unwrap_or(Expr::mk_type());
+            let target_sort_whnf = tc.whnf(&target_sort);
+            match &target_sort_whnf {
+                Expr::Sort(l) => l.clone(),
+                _ => Level::Zero,
+            }
+        };
+
+        let motive = Expr::Lambda(
+            var_name.clone(),
+            BinderInfo::Default,
+            Rc::new(var_ty_whnf),
+            Rc::new(target.abstract_fvar(&var_name, 0)),
+        );
+
+        let rec_levels = vec![u_level.clone()];
+        let mut proof = Expr::mk_const(rec_name.clone(), rec_levels);
+
+        for i in 0..num_params as usize {
+            if i < ind_args.len() {
+                proof = Expr::mk_app(proof, ind_args[i].clone());
+            }
+        }
+        proof = Expr::mk_app(proof, motive.clone());
+
+        // Apply minor premises
         for mvar_expr in minor_mvars.iter().rev() {
             proof = Expr::mk_app(proof, mvar_expr.clone());
         }
@@ -431,20 +502,26 @@ impl<'a> TacticEngine<'a> {
 
     /// Introduce a local let-binding (have h : P := proof)
     pub fn tactic_have(&mut self, name: &str, ty: &Expr, proof: &Expr) -> Result<(), String> {
+        let goal_lctx = {
+            let goal = self.current_goal().ok_or("No goals remaining")?;
+            goal.lctx.clone()
+        };
+
+        {
+            let mut tc = TypeChecker::with_local_ctx(self.st, goal_lctx);
+            let proof_ty = tc.infer(proof)
+                .map_err(|e| format!("have: type inference failed: {}", e))?;
+
+            if !tc.is_def_eq(&proof_ty, ty) {
+                return Err(format!(
+                    "have: type mismatch. Expected {}, got {}",
+                    format_expr(ty),
+                    format_expr(&proof_ty)
+                ));
+            }
+        } // tc released here
+
         let goal = self.current_goal_mut().ok_or("No goals remaining")?;
-
-        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-        let proof_ty = tc.infer(proof)
-            .map_err(|e| format!("have: type inference failed: {}", e))?;
-
-        if !tc.is_def_eq(&proof_ty, ty) {
-            return Err(format!(
-                "have: type mismatch. Expected {}, got {}",
-                format_expr(ty),
-                format_expr(&proof_ty)
-            ));
-        }
-
         goal.lctx.mk_let_decl(Name::new(name), Name::new(name), ty.clone(), proof.clone());
         Ok(())
     }
@@ -537,31 +614,45 @@ fn format_expr(e: &Expr) -> String {
         Expr::Const(name, _) => name.to_string(),
         Expr::App(_, _) => {
             let (head, args) = e.get_app_args();
-            let head_str = head.map(|h| format_expr(h)).unwrap_or_else(|| "?".to_string());
-            let args_str: Vec<String> = args.iter().map(|a| format_expr(a)).collect();
-            format!("{}({})", head_str, args_str.join(", "))
+            if let Some(h) = head {
+                let mut s = format_expr(h);
+                for arg in args {
+                    s.push(' ');
+                    s.push_str(&format_expr(arg));
+                }
+                s
+            } else {
+                "(app)".to_string()
+            }
         }
-        Expr::Lambda(_, _, ty, body) => format!("fun _ : {} => {}", format_expr(ty), format_expr(body)),
-        Expr::Pi(_, _, ty, body) => format!("(_ : {}) -> {}", format_expr(ty), format_expr(body)),
-        Expr::BVar(n) => format!("x{}", n),
+        Expr::Pi(name, _, dom, body) => {
+            format!("Pi({} : {}, {})", name.to_string(), format_expr(dom), format_expr(body))
+        }
+        Expr::Lambda(name, _, dom, body) => {
+            format!("fun({} : {}) => {}", name.to_string(), format_expr(dom), format_expr(body))
+        }
+        Expr::Sort(l) => format!("Sort({})", format_level(l)),
+        Expr::BVar(i) => format!("BVar({})", i),
         Expr::FVar(name) => name.to_string(),
         Expr::MVar(name) => format!("?{}", name.to_string()),
-        Expr::Sort(l) => format!("Sort({:?})", l),
-        _ => format!("{:?}", e),
+        Expr::Let(name, ty, val, body, _) => {
+            format!("let {} : {} := {} in {}", name.to_string(), format_expr(ty), format_expr(val), format_expr(body))
+        }
+        Expr::Proj(name, idx, e) => {
+            format!("({}.proj{})", format_expr(e), idx)
+        }
+        Expr::MData(_, e) => format_expr(e),
+        Expr::Lit(lit) => format!("{:?}", lit),
     }
 }
 
-/// Find the inductive type name from a type expression
-fn get_inductive_name(ty: &Expr) -> Option<Name> {
-    match ty {
-        Expr::Const(name, _) => Some(name.clone()),
-        _ => None,
+fn format_level(l: &Level) -> String {
+    match l {
+        Level::Zero => "0".to_string(),
+        Level::Param(name) => name.to_string(),
+        Level::MVar(name) => format!("?{}", name.to_string()),
+        Level::Succ(inner) => format!("succ({})", format_level(inner)),
+        Level::Max(a, b) => format!("max({}, {})", format_level(a), format_level(b)),
+        Level::IMax(a, b) => format!("imax({}, {})", format_level(a), format_level(b)),
     }
-}
-
-/// Get the number of minor premises (constructors) for an inductive type
-fn get_num_minors(env: &Environment, ind_name: &Name) -> Option<u64> {
-    let info = env.find(ind_name)?;
-    let ind_val = info.to_inductive_val()?;
-    Some(ind_val.ctors.len() as u64)
 }
