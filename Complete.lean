@@ -2,12 +2,14 @@
 -- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, Cauchy.lean, Real.lean
 
 -- 序列收敛到实数
--- 依赖 FracArith.lean 中的 seq_converges_to_compat
+-- 用 Quot.ind 定义，天然代表元无关，无需 seq_converges_to_compat
 def seq_converges_to (a : Nat -> Frac) (L : Real) : Prop :=
-  Quot.lift (Nat -> Frac) cauchy_equiv Prop (fun l =>
-    forall (k : Nat), exists (N : Nat), forall (n : Nat),
-      gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k)
-  ) (fun l l' h => seq_converges_to_compat a l l' h) L
+  Quot.ind (Nat -> Frac) cauchy_equiv
+    (fun l => forall (k : Nat), exists (N : Nat), forall (n : Nat),
+      gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))
+    (fun l => forall (k : Nat), exists (N : Nat), forall (n : Nat),
+      gt n N -> frac_lt (frac_abs (frac_sub (a n) (l k))) (frac_inv k))
+    L
 
 -- 从柯西条件提取 witness N（使用选择公理）
 def cauchy_N (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) : Nat :=

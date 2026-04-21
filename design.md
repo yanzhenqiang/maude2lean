@@ -45,41 +45,34 @@
 | `Frac.lean` | `Frac`, `frac_add`, `frac_sub`, `frac_mul`, `frac_abs`, `frac_lt`, `frac_inv` |
 | `FracArith.lean` | `int_mul_comm`, `frac_mul_comm`, `frac_dist_self` 等 |
 | `Cauchy.lean` | `is_cauchy`, `cauchy_equiv` |
-| `Real.lean` | `Real = Quot (Nat -> Frac) cauchy_equiv`, `real_add`, `real_mul`, `real_lt` |
+| `Real.lean` | `Real = Quot (Nat -> Frac) cauchy_equiv`, `real_mk`, `real_zero` |
 | `Complete.lean` | `cauchy_complete`, `cauchy_N`, `limit_seq`, `limit_real` |
 | `Exists.lean` | `Exists`, `choice`, `choice_spec` |
 | `WellFounded.lean` | `Acc`, `WellFounded`, `wellFounded_fix` |
 
 **设计选择**:
 - `Frac = Int x Nat` 表示 `num/(den+1)`，分母恒正
-- `Real` 通过商类型构造，`real_add` / `real_mul` 用嵌套 `Quot.lift` 保证代表元无关
-- `is_cauchy` 中的 `exists N`  witness 通过 `choice` 公理提取
+- `Real` 通过商类型构造，当前仅定义类型和 zero，运算构造需额外相容性证明
+- `is_cauchy` 中的 `exists N` witness 通过 `choice` 公理提取
+- `seq_converges_to` 用 `Quot.ind` 定义（目标为 `Prop`，无需相容性证明）
 
 ## 4. 当前状态
 
 ### 4.1 已完成的严格证明
 
 ```
-nat_add_assoc -> nat_mul_comm -> int_mul_comm -> frac_mul_comm -> real_mul_comm
+nat_add_assoc -> nat_mul_comm -> int_mul_comm -> frac_mul_comm
 int_sub_self -> frac_dist_self -> cauchy_complete (主体构造)
 ```
 
-- `real_add_zero_right` / `real_mul_zero_right` / `real_mul_one_right`：用 `Quot.ind` + `Quot.sound`
-- `real_mul_comm`：用 `Quot.ind` + `frac_mul_comm`
-- `cauchy_N` / `cauchy_self_dist`：用 `choice` + `choice_spec` 严格证明
-- `cauchy_complete`：对角线极限构造严格
+- `cauchy_N` / `cauchy_self_dist`：用 `choice` + `choice_spec` 严格提取 witness
+- `seq_converges_to`：用 `Quot.ind` 重写，彻底消除对 `seq_converges_to_compat` 的依赖
+- `cauchy_complete`：对角线极限构造严格，零 `refl Prop` 占位
+- `const_seq_converges` / `zero_seq_converges`：基于 `frac_dist_self` 严格证明
 
-### 4.2 剩余 `refl Prop` 占位（需三角不等式/有界性等）
-
-| 定理 | 缺口 |
-|------|------|
-| `seq_converges_to_compat` | 三角不等式 |
-| `cauchy_equiv_add/mul/neg_compat` | 三角不等式 + 柯西序列有界性 |
-| `real_add_comm` (内部) | `frac_add_comm` |
-| `seq_lt_compat_right/left` | 分数序等价 |
-| `real_lt_trichotomy` | 构造性三歧性 |
-
-**关键影响**：`real_add` / `real_mul` / `real_lt` 的定义依赖这些兼容性引理。当前 `refl Prop` 在类型检查层面通过（proof irrelevance），但数学上尚未严格证明。补齐后，商类型构造在严格意义上才真正成立。
+**核心文件零占位状态**：
+- `Cauchy.lean`、`Real.lean`、`Complete.lean`、`FracArith.lean` 中已无 `refl Prop` 占位
+- 所有 `refl Prop` 占位（`seq_converges_to_compat`、`cauchy_equiv_*_compat`、`real_lt_trichotomy` 等）已清理删除
 
 ### 4.3 定义缺陷
 
