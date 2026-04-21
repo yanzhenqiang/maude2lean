@@ -83,7 +83,8 @@ theorem int_mul_comm : forall (a : Int) (b : Int), Eq Int (int_mul a b) (int_mul
               (fun y : Nat => Eq Int (ofNat (nat_mul m n)) (ofNat y))
               (nat_mul_comm m n)
               (refl Int (ofNat (nat_mul m n))))
-          (fun n : Nat => refl Int (int_mul (ofNat m) (negSucc n))))
+          (fun n : Nat => refl Int (int_mul (ofNat m) (negSucc n)))
+          b)
       (fun m : Nat =>
         rec.Int (fun y : Int => Eq Int (int_mul (negSucc m) y) (int_mul y (negSucc m)))
           (fun n : Nat => refl Int (int_mul (negSucc m) (ofNat n)))
@@ -91,7 +92,8 @@ theorem int_mul_comm : forall (a : Int) (b : Int), Eq Int (int_mul a b) (int_mul
             eq_subst Nat (nat_mul (succ m) (succ n)) (nat_mul (succ n) (succ m))
               (fun y : Nat => Eq Int (ofNat (nat_mul (succ m) (succ n))) (ofNat y))
               (nat_mul_comm (succ m) (succ n))
-              (refl Int (ofNat (nat_mul (succ m) (succ n))))))
+              (refl Int (ofNat (nat_mul (succ m) (succ n)))))
+          b)
       a
 
 -- int_sub a a = ofNat 0（整数自减为零）
@@ -129,7 +131,7 @@ theorem frac_mul_comm : forall (x : Frac) (y : Frac), Eq Frac (frac_mul x y) (fr
               (fun y_val : Int => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk y_val (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))))
               (int_mul_comm n1 n2)
               (eq_subst Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))
-                (fun y_val : Nat => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk (int_mul n2 n1) y_val))
+                (fun y_val : Nat => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk (int_mul n1 n2) y_val))
                 (eq_subst Nat (nat_mul (succ d1) (succ d2)) (nat_mul (succ d2) (succ d1))
                   (fun y_val : Nat => Eq Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub y_val (succ zero)))
                   (nat_mul_comm (succ d1) (succ d2))
@@ -174,13 +176,14 @@ theorem frac_dist_self : forall (a : Frac) (k : Nat),
   fun a : Frac => fun k : Nat =>
     rec.Frac (fun x : Frac => frac_lt (frac_abs (frac_sub x x)) (frac_inv k))
       (fun n : Int => fun d : Nat =>
-        eq_subst Int (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))) (ofNat 0)
-          (fun y : Int => frac_lt (frac_abs (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero)))) (frac_inv k))
-          (int_sub_self (int_mul n (ofNat (succ d))))
-          (eq_subst Int (int_abs (ofNat 0)) (ofNat 0)
-            (fun y : Int => frac_lt (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero))) (frac_inv k))
-            (int_abs_zero)
-            (le_succ zero d (le_zero d))))
+        eq_subst Int (ofNat 0) (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))))
+          (fun y : Int => frac_lt (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero))) (frac_inv k))
+          (eq_sym Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))) (ofNat 0)
+            (eq_subst Int (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))) (ofNat 0)
+              (fun y : Int => Eq Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))) (int_abs y))
+              (int_sub_self (int_mul n (ofNat (succ d))))
+              (refl Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))))))
+          (le_one_succ_sub_one (nat_mul (succ d) (succ d))))
       a
 
 -- =====================================================================

@@ -320,18 +320,27 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
-    /// Check if an expression is the type Prop (i.e., Sort(0)).
-    /// Handles both direct Sort(0) and constants whose type is Sort(0).
-    fn is_prop_type(&mut self, e: &Expr) -> bool {
-        let e_whnf = self.whnf(e);
-        if let Ok(sort) = self.ensure_sort(&e_whnf) {
-            if let Ok(lvl) = self.sort_level(&sort) {
-                return lvl.is_zero();
-            }
+    /// Quick check if an expression could be a proof term.
+    /// Returns false for types (Sort, Pi) since they are not proofs.
+    /// Follows Lean 4's isProofQuick pattern.
+    fn is_proof_quick(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Sort(_) => false,
+            Expr::Pi(_, _, _, _) => false,
+            Expr::Lambda(_, _, _, body) => self.is_proof_quick(body),
+            Expr::Let(_, _, _, body, _) => self.is_proof_quick(body),
+            Expr::MData(_, inner) => self.is_proof_quick(inner),
+            _ => true,
         }
-        // If e is not directly a sort (e.g., P where P : Prop),
-        // check if its type is Prop
-        if let Ok(ty) = self.infer(&e_whnf) {
+    }
+
+    /// Check if an expression's type is Prop (i.e., Sort(0)).
+    /// This checks if `e` is a proposition (inhabits Prop), NOT if `e` itself is Prop.
+    /// Note: Prop itself is a universe (Type), not a proposition.
+    fn is_prop_type(&mut self, e: &Expr) -> bool {
+        // We only check if e's type is Prop.
+        // We do NOT check if e itself is Sort(0), because Prop : Type, not Prop : Prop.
+        if let Ok(ty) = self.infer(e) {
             let ty_whnf = self.whnf(&ty);
             if let Ok(sort) = self.ensure_sort(&ty_whnf) {
                 if let Ok(lvl) = self.sort_level(&sort) {
@@ -720,11 +729,14 @@ impl<'a> TypeChecker<'a> {
 
         // Proof irrelevance: any two terms of the same Prop type are defeq
         // A type is a proposition if it is Sort(0), i.e., Prop
-        if let (Ok(t_ty), Ok(s_ty)) = (self.infer(t), self.infer(s)) {
-            let t_is_prop = self.is_prop_type(&t_ty);
-            let s_is_prop = self.is_prop_type(&s_ty);
-            if t_is_prop && s_is_prop && self.is_def_eq(&t_ty, &s_ty) {
-                return true;
+        // Only apply to actual proof terms, not to types themselves (Sort/Pi)
+        if self.is_proof_quick(t) && self.is_proof_quick(s) {
+            if let (Ok(t_ty), Ok(s_ty)) = (self.infer(t), self.infer(s)) {
+                let t_is_prop = self.is_prop_type(&t_ty);
+                let s_is_prop = self.is_prop_type(&s_ty);
+                if t_is_prop && s_is_prop && self.is_def_eq(&t_ty, &s_ty) {
+                    return true;
+                }
             }
         }
 
