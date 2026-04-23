@@ -242,6 +242,7 @@ fn run_tui(args: &[String]) {
 
     // Load dependencies via Repl
     let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    repl.set_quiet(true);
     if !deps.is_empty() {
         match repl.check_files(&deps.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
             Ok(()) => {}

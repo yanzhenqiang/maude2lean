@@ -30,6 +30,7 @@ pub struct Repl {
     tc_state: TypeCheckerState,
     /// Mapping from user-defined names to their Expr representations
     env_bindings: HashMap<String, Expr>,
+    quiet: bool,
 }
 
 /// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
@@ -117,9 +118,14 @@ impl Repl {
             env,
             tc_state,
             env_bindings: HashMap::new(),
+            quiet: false,
         };
         repl.load_quot();
         repl
+    }
+
+    pub fn set_quiet(&mut self, quiet: bool) {
+        self.quiet = quiet;
     }
 
     /// Generate an auxiliary inductive type for a nested occurrence.
@@ -184,7 +190,9 @@ impl Repl {
             for decl in decls {
                 self.process_decl(decl)?;
             }
-            println!("  Loaded {} declarations from {}", count, filepath);
+            if !self.quiet {
+                println!("  Loaded {} declarations from {}", count, filepath);
+            }
         }
         Ok(())
     }
@@ -307,7 +315,9 @@ impl Repl {
         for decl in decls {
             self.process_decl(decl)?;
         }
-        println!("  Loaded {} declarations from {}", count, filepath);
+        if !self.quiet {
+            println!("  Loaded {} declarations from {}", count, filepath);
+        }
         Ok(())
     }
 
@@ -326,7 +336,9 @@ impl Repl {
                 self.env.add(decl).map_err(|e| e)?;
                 self.tc_state = TypeCheckerState::new(self.env.clone());
                 self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-                println!("  Added axiom: {}", name);
+                if !self.quiet {
+                    println!("  Added axiom: {}", name);
+                }
                 Ok(())
             }
             ParsedDecl::Def { name, params, ret_ty, value } => {
@@ -413,7 +425,9 @@ impl Repl {
                         self.env_bindings.insert(t.to_string(), Expr::mk_const(t.clone(), vec![]));
                         let rec_name = format!("rec.{}", t.to_string());
                         self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&t.to_string()), vec![]));
-                        println!("  Added inductive: {}", t.to_string());
+                        if !self.quiet {
+                            println!("  Added inductive: {}", t.to_string());
+                        }
                     }
                     return Ok(());
                 }
@@ -448,7 +462,11 @@ impl Repl {
                 let rec_name = format!("rec.{}", name);
                 self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
 
-                println!("  Added inductive: {}", name);
+                if !self.quiet {
+
+                    println!("  Added inductive: {}", name);
+
+                }
                 Ok(())
             }
             ParsedDecl::MutualInductive { types } => {
@@ -497,7 +515,9 @@ impl Repl {
                     self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(name), vec![]));
                     let rec_name = format!("rec.{}", name);
                     self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(name), vec![]));
-                    println!("  Added inductive: {}", name);
+                    if !self.quiet {
+                        println!("  Added inductive: {}", name);
+                    }
                 }
                 Ok(())
             }
@@ -606,11 +626,15 @@ impl Repl {
 
                     self.env.add(proj_decl).map_err(|e| e)?;
                     self.env_bindings.insert(proj_name.clone(), Expr::mk_const(Name::new(&proj_name), vec![]));
-                    println!("  Added projection: {}", proj_name);
+                    if !self.quiet {
+                        println!("  Added projection: {}", proj_name);
+                    }
                 }
 
                 self.tc_state = TypeCheckerState::new(self.env.clone());
-                println!("  Added structure: {}", name);
+                if !self.quiet {
+                    println!("  Added structure: {}", name);
+                }
                 Ok(())
             }
         }
@@ -704,7 +728,9 @@ impl Repl {
             self.env.add(decl).map_err(|e| e)?;
             self.tc_state = TypeCheckerState::new(self.env.clone());
             self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-            println!("  Added theorem: {}", name);
+            if !self.quiet {
+                println!("  Added theorem: {}", name);
+            }
         } else {
             let decl = Declaration::Definition(DefinitionVal {
                 constant_val: ConstantVal {
@@ -719,7 +745,9 @@ impl Repl {
             self.env.add(decl).map_err(|e| e)?;
             self.tc_state = TypeCheckerState::new(self.env.clone());
             self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-            println!("  Added definition: {}", name);
+            if !self.quiet {
+                println!("  Added definition: {}", name);
+            }
         }
         Ok(())
     }
@@ -746,7 +774,9 @@ impl Repl {
         self.env.add(decl).map_err(|e| e)?;
         self.tc_state = TypeCheckerState::new(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-        println!("  Added axiom: {}", name);
+        if !self.quiet {
+            println!("  Added axiom: {}", name);
+        }
         Ok(())
     }
 
@@ -798,7 +828,9 @@ impl Repl {
         self.env.add(decl).map_err(|e| e)?;
         self.tc_state = TypeCheckerState::new(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-        println!("  Added definition: {}", name);
+        if !self.quiet {
+            println!("  Added definition: {}", name);
+        }
         Ok(())
     }
 
@@ -837,7 +869,9 @@ impl Repl {
         self.env.add(decl).map_err(|e| e)?;
         self.tc_state = TypeCheckerState::new(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-        println!("  Added theorem: {}", name);
+        if !self.quiet {
+            println!("  Added theorem: {}", name);
+        }
         Ok(())
     }
 
@@ -897,7 +931,11 @@ impl Repl {
         let rec_name = format!("rec.{}", name);
         self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
 
-        println!("  Added inductive: {}", name);
+        if !self.quiet {
+
+            println!("  Added inductive: {}", name);
+
+        }
         Ok(())
     }
 

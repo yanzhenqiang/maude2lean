@@ -56,8 +56,6 @@ impl TuiApp {
     }
 
     pub fn run(&mut self) -> io::Result<()> {
-        // Try to enter interactive TUI mode; if terminal doesn't support it,
-        // fall back to printing a single static frame (useful in CI/pipes).
         if enable_raw_mode().is_err() {
             return self.run_static();
         }
@@ -97,7 +95,6 @@ impl TuiApp {
     /// Static mode: print one frame and exit (for non-interactive terminals).
     fn run_static(&mut self) -> io::Result<()> {
         self.refresh_size();
-        // Use a fixed smaller size for static output
         self.term_h = 30;
         self.term_w = 100;
         self.left_w = 55;
@@ -158,10 +155,10 @@ impl TuiApp {
     }
 
     fn content_height(&self) -> u16 {
-        self.term_h.saturating_sub(3) // title + separator + status
+        self.term_h.saturating_sub(3)
     }
 
-    // --- Info Panel ---
+    // --- Info Panel (Goal only) ---
 
     fn update_info(&mut self) {
         self.info_lines.clear();
@@ -178,10 +175,23 @@ impl TuiApp {
         } else if trimmed.starts_with("--") {
             self.info_lines.push("⊢ Comment".to_string());
         } else {
-            // Try declaration signature first
-            if let Some((sig, ty)) = self.try_decl_type(&trimmed) {
-                self.info_lines.push(format!("⊢ {} :", sig));
-                for wrapped in self.wrap_text(&ty, self.info_width() as usize - 2) {
+            // Try declaration signature first (InfoView style: hypotheses + goal)
+            if let Some((sig, premises, goal)) = self.try_decl_type(&trimmed) {
+                // Hypotheses (Pi binders)
+                let has_premises = !premises.is_empty();
+                for p in &premises {
+                    for wrapped in self.wrap_text(p, self.info_width() as usize) {
+                        self.info_lines.push(wrapped);
+                    }
+                }
+                // Separator if there are hypotheses
+                if has_premises {
+                    let sep = "─".repeat(self.info_width() as usize);
+                    self.info_lines.push(sep);
+                }
+                // Goal
+                self.info_lines.push(format!("⊢ {}", sig));
+                for wrapped in self.wrap_text(&goal, self.info_width() as usize - 2) {
                     self.info_lines.push(format!("  {}", wrapped));
                 }
             } else if let Some(ty) = self.try_infer_expr(&trimmed) {
@@ -193,30 +203,9 @@ impl TuiApp {
                 }
             }
         }
-
-        // Separator
-        let sep = "─".repeat(self.info_width() as usize);
-        self.info_lines.push(String::new());
-        self.info_lines.push(sep);
-
-        // Relevant environment declarations (recently added)
-        let mut names: Vec<String> = self.env_bindings.keys().cloned().collect();
-        names.sort();
-        let pairs: Vec<(String, Expr)> = names.iter()
-            .filter_map(|n| self.env_bindings.get(n).map(|e| (n.clone(), e.clone())))
-            .collect();
-
-        // Show last ~10 declarations
-        let start = pairs.len().saturating_sub(10);
-        for (_, (name, expr)) in pairs.iter().enumerate().skip(start) {
-            if let Ok(ty) = self.infer_expr(expr) {
-                let line = format!("{} : {}", name, self.truncate(&ty, self.info_width() as usize - name.len() - 3));
-                self.info_lines.push(line);
-            }
-        }
     }
 
-    fn try_decl_type(&mut self, line: &str) -> Option<(String, String)> {
+    fn try_decl_type(&mut self, line: &str) -> Option<(String, Vec<String>, String)> {
         let words: Vec<&str> = line.split_whitespace().collect();
         if words.len() < 2 {
             return None;
@@ -227,16 +216,15 @@ impl TuiApp {
         }
         let name = words[1];
         if let Some(info) = self.env.find(&Name::new(name)) {
-            let ty = format_expr(info.get_type());
-            return Some((format!("{} {}", kind, name), ty));
+            let ty = info.get_type();
+            let (premises, goal) = extract_premises(ty);
+            return Some((format!("{} {}", kind, name), premises, goal));
         }
         None
     }
 
     fn try_infer_expr(&mut self, line: &str) -> Option<String> {
-        // Strip common prefixes that are not expressions
         let stripped = if line.starts_with("theorem") || line.starts_with("def") || line.starts_with("axiom") {
-            // Try to extract the body after ":="
             if let Some(pos) = line.find(":=") {
                 line[pos + 2..].trim()
             } else {
@@ -245,7 +233,6 @@ impl TuiApp {
         } else if line.starts_with("inductive") {
             return None;
         } else if line.starts_with("|") {
-            // Constructor line: extract after ":"
             if let Some(pos) = line.find(':') {
                 line[pos + 1..].trim()
             } else {
@@ -271,12 +258,6 @@ impl TuiApp {
             Ok(ty) => Some(format_expr(&ty)),
             Err(_) => None,
         }
-    }
-
-    fn infer_expr(&mut self, expr: &Expr) -> Result<String, String> {
-        let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
-        let ty = tc.infer(expr).map_err(|e| e)?;
-        Ok(format_expr(&ty))
     }
 
     fn info_width(&self) -> u16 {
@@ -312,6 +293,8 @@ impl TuiApp {
     // --- Drawing ---
 
     fn draw(&self, stdout: &mut io::Stdout) -> io::Result<()> {
+        use std::io::Write;
+
         stdout.queue(Clear(ClearType::All))?;
 
         let w = self.term_w;
@@ -327,14 +310,14 @@ impl TuiApp {
         let title_chars = title.chars().count();
         let title_pad = (w as usize).saturating_sub(title_chars + 10) / 2;
         stdout.queue(MoveTo(0, 0))?;
-        print!("{}{}", " ".repeat(title_pad), title);
-        print!("{}[q:quit]", " ".repeat((w as usize).saturating_sub(title_pad + title_chars + 8)));
+        write!(stdout, "{}{}", " ".repeat(title_pad), title)?;
+        write!(stdout, "{}[q:quit]", " ".repeat((w as usize).saturating_sub(title_pad + title_chars + 8)))?;
 
         // Separator under title
         stdout.queue(MoveTo(0, 1))?;
-        print!("{}", "─".repeat(lw as usize));
+        write!(stdout, "{}", "─".repeat(lw as usize))?;
         stdout.queue(MoveTo(lw + 1, 1))?;
-        print!("┬{}" , "─".repeat((w - lw - 2) as usize));
+        write!(stdout, "┬{}", "─".repeat((w - lw - 2) as usize))?;
 
         // Content area
         let content_h = self.content_height();
@@ -350,17 +333,17 @@ impl TuiApp {
                 let avail = (lw as usize).saturating_sub(prefix.len() + 1);
                 let display = self.truncate(line_text, avail);
                 if is_selected {
-                    print!("{}> {}", prefix, display);
+                    write!(stdout, "{}> {}", prefix, display)?;
                 } else {
-                    print!("{}  {}", prefix, display);
+                    write!(stdout, "{}  {}", prefix, display)?;
                 }
             } else {
-                print!("{:3}  ~", " ");
+                write!(stdout, "{:3}  ~", " ")?;
             }
 
             // Right border
             stdout.queue(MoveTo(lw + 1, y))?;
-            print!("│");
+            write!(stdout, "│")?;
 
             // Info panel
             let info_idx = row as usize;
@@ -369,16 +352,16 @@ impl TuiApp {
                 let avail = (w - lw - 3) as usize;
                 let display = self.truncate(info, avail);
                 stdout.queue(MoveTo(lw + 3, y))?;
-                print!("{}", display);
+                write!(stdout, "{}", display)?;
             }
         }
 
         // Bottom separator
         let bottom_y = h - 1;
         stdout.queue(MoveTo(0, bottom_y))?;
-        print!("{}", "─".repeat(lw as usize));
+        write!(stdout, "{}", "─".repeat(lw as usize))?;
         stdout.queue(MoveTo(lw + 1, bottom_y))?;
-        print!("┴{}", "─".repeat((w - lw - 2) as usize));
+        write!(stdout, "┴{}", "─".repeat((w - lw - 2) as usize))?;
 
         // Status line
         let status = format!("Line {}/{} | {} declarations",
@@ -387,11 +370,23 @@ impl TuiApp {
             self.env_bindings.len()
         );
         stdout.queue(MoveTo(0, bottom_y))?;
-        print!(" {}", status);
+        write!(stdout, " {}", status)?;
 
         stdout.flush()?;
         Ok(())
     }
+}
+
+/// Extract Pi binders as hypotheses and the final goal type.
+/// Returns (list of "name : type" strings, goal type string).
+fn extract_premises(e: &Expr) -> (Vec<String>, String) {
+    let mut premises = Vec::new();
+    let mut current = e;
+    while let Expr::Pi(name, _, dom, body) = current {
+        premises.push(format!("{} : {}", name.to_string(), format_expr(dom)));
+        current = body;
+    }
+    (premises, format_expr(current))
 }
 
 /// Format an Expr for display (simplified).
