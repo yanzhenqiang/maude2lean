@@ -6,3 +6,4 @@ pub mod type_checker;
 pub mod tactic;
 pub mod repl;
 pub mod repl_parser;
+pub mod tui;

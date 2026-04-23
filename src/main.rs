@@ -21,6 +21,13 @@ fn main() {
             }
             run_check_files(&args[2..]);
         }
+        "tui" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} tui <target.lean> [dep1.lean dep2.lean ...]", args[0]);
+                std::process::exit(1);
+            }
+            run_tui(&args[2..]);
+        }
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             print_usage(&args[0]);
@@ -35,6 +42,7 @@ fn print_usage(prog: &str) {
     eprintln!("  lean-check                   Run Lean kernel type checker tests");
     eprintln!("  repl                         Start interactive Lean REPL");
     eprintln!("  check-files <file>...        Batch check .lean files");
+    eprintln!("  tui <target> [deps...]       Interactive TUI goal viewer");
 }
 
 fn run_repl() {
@@ -213,6 +221,49 @@ fn run_check_files(files: &[String]) {
             eprintln!("FAIL: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+fn run_tui(args: &[String]) {
+    use std::fs;
+
+    let target = &args[0];
+    let deps = if args.len() > 1 { &args[1..] } else { &[] };
+
+    // Read target file content
+    let content = match fs::read_to_string(target) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Cannot read '{}': {}", target, e);
+            std::process::exit(1);
+        }
+    };
+    let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    // Load dependencies via Repl
+    let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    if !deps.is_empty() {
+        match repl.check_files(&deps.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("Failed to load dependencies: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Also try to load the target file itself into the environment
+    match repl.check_files(&[target.as_str()]) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Warning: target file has errors: {}", e);
+        }
+    }
+
+    let mut app = lean_cauchy_kernel::lean::tui::TuiApp::new(repl, lines);
+    if let Err(e) = app.run() {
+        eprintln!("TUI error: {}", e);
+        std::process::exit(1);
     }
 }
 

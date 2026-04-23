@@ -1152,6 +1152,11 @@ impl Repl {
         self.env_bindings.insert("Quot.ind".to_string(), Expr::mk_const(Name::new("Quot").extend("ind"), vec![]));
         self.env_bindings.insert("Quot.sound".to_string(), Expr::mk_const(Name::new("Quot").extend("sound"), vec![]));
     }
+
+    /// Extract internal state for external tools (e.g., TUI).
+    pub fn into_state(self) -> (Environment, TypeCheckerState, HashMap<String, Expr>) {
+        (self.env, self.tc_state, self.env_bindings)
+    }
 }
 
 /// Parse an expression for tactic use (standalone to avoid borrow conflicts)
