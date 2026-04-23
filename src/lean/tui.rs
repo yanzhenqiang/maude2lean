@@ -166,62 +166,57 @@ impl TuiApp {
     fn update_info(&mut self) {
         self.info_lines.clear();
         if self.file_lines.is_empty() {
-            self.info_lines.push("(empty file)".to_string());
+            self.info_lines.push("⊢ (empty file)".to_string());
             return;
         }
 
         let line = self.file_lines[self.selected].clone();
-        let line_num = self.selected + 1;
-
-        self.info_lines.push(format!("Line {}", line_num));
-        self.info_lines.push("-".repeat(self.info_width() as usize));
-
         let trimmed = line.trim().to_string();
+
         if trimmed.is_empty() {
-            self.info_lines.push("(empty line)".to_string());
+            self.info_lines.push("⊢ (empty line)".to_string());
         } else if trimmed.starts_with("--") {
-            self.info_lines.push("Comment".to_string());
+            self.info_lines.push("⊢ Comment".to_string());
         } else {
-            // Try to identify declaration
-            if let Some(info) = self.try_decl_info(&trimmed) {
-                self.info_lines.push(info);
-            }
-            // Try to parse as expression and infer type
-            if let Some(type_str) = self.try_infer_expr(&trimmed) {
-                self.info_lines.push("Type:".to_string());
-                for wrapped in self.wrap_text(&type_str, self.info_width() as usize - 2) {
+            // Try declaration signature first
+            if let Some((sig, ty)) = self.try_decl_type(&trimmed) {
+                self.info_lines.push(format!("⊢ {} :", sig));
+                for wrapped in self.wrap_text(&ty, self.info_width() as usize - 2) {
                     self.info_lines.push(format!("  {}", wrapped));
+                }
+            } else if let Some(ty) = self.try_infer_expr(&trimmed) {
+                if !ty.is_empty() {
+                    self.info_lines.push("⊢".to_string());
+                    for wrapped in self.wrap_text(&ty, self.info_width() as usize - 2) {
+                        self.info_lines.push(format!("  {}", wrapped));
+                    }
                 }
             }
         }
 
-        // Environment context
+        // Separator
+        let sep = "─".repeat(self.info_width() as usize);
         self.info_lines.push(String::new());
-        self.info_lines.push("Environment:".to_string());
-        self.info_lines.push("-".repeat(self.info_width() as usize));
+        self.info_lines.push(sep);
 
+        // Relevant environment declarations (recently added)
         let mut names: Vec<String> = self.env_bindings.keys().cloned().collect();
         names.sort();
-        let total = names.len();
-        // Collect (name, expr) pairs first to avoid borrow issues
         let pairs: Vec<(String, Expr)> = names.iter()
             .filter_map(|n| self.env_bindings.get(n).map(|e| (n.clone(), e.clone())))
             .collect();
-        let mut count = 0;
-        for (name, expr) in pairs {
-            if count >= 15 {
-                self.info_lines.push(format!("  ... and {} more", total - 15));
-                break;
-            }
-            if let Ok(ty) = self.infer_expr(&expr) {
-                let ty_short = self.truncate(&ty, self.info_width() as usize - 6 - name.len());
-                self.info_lines.push(format!("  {} : {}", name, ty_short));
-                count += 1;
+
+        // Show last ~10 declarations
+        let start = pairs.len().saturating_sub(10);
+        for (_, (name, expr)) in pairs.iter().enumerate().skip(start) {
+            if let Ok(ty) = self.infer_expr(expr) {
+                let line = format!("{} : {}", name, self.truncate(&ty, self.info_width() as usize - name.len() - 3));
+                self.info_lines.push(line);
             }
         }
     }
 
-    fn try_decl_info(&mut self, line: &str) -> Option<String> {
+    fn try_decl_type(&mut self, line: &str) -> Option<(String, String)> {
         let words: Vec<&str> = line.split_whitespace().collect();
         if words.len() < 2 {
             return None;
@@ -233,7 +228,7 @@ impl TuiApp {
         let name = words[1];
         if let Some(info) = self.env.find(&Name::new(name)) {
             let ty = format_expr(info.get_type());
-            return Some(format!("{} {} : {}", kind, name, ty));
+            return Some((format!("{} {}", kind, name), ty));
         }
         None
     }
