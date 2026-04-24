@@ -354,27 +354,6 @@ impl Environment {
         ))
     }
 
-    /// Check if a constructor has recursive arguments (single inductive).
-    fn ctor_is_recursive(ctor_ty: &Expr, num_params: u64, ind_name: &Name) -> bool {
-        let mut current = ctor_ty;
-        // Skip parameter binders
-        for _ in 0..num_params {
-            if let Some(body) = current.binding_body() {
-                current = body;
-            } else {
-                return false;
-            }
-        }
-        // Check field types for occurrences of the inductive type
-        while let Expr::Pi(_, _, domain, body) = current {
-            if Self::expr_contains_const(domain, ind_name) {
-                return true;
-            }
-            current = body;
-        }
-        false
-    }
-
     /// Check if a constructor has recursive arguments (mutual inductive).
     fn ctor_is_recursive_mutual(ctor_ty: &Expr, num_params: u64, all_names: &[Name]) -> bool {
         let mut current = ctor_ty;

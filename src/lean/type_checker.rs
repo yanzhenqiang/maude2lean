@@ -346,19 +346,6 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Check if an expression is a proposition (its type is Prop)
-    fn is_prop(&mut self, e: &Expr) -> bool {
-        if let Ok(ty) = self.infer(e) {
-            let ty_whnf = self.whnf(&ty);
-            if let Ok(sort) = self.ensure_sort(&ty_whnf) {
-                if let Ok(lvl) = self.sort_level(&sort) {
-                    return lvl.is_zero();
-                }
-            }
-        }
-        false
-    }
-
     /// Quick check if an expression could be a proof term.
     /// Returns false for types (Sort, Pi) since they are not proofs.
     /// Follows Lean 4's isProofQuick pattern.

@@ -1,7 +1,6 @@
-use super::declaration::*;
 use super::environment::Environment;
 use super::expr::*;
-use super::local_ctx::{LocalCtx, LocalDecl};
+use super::local_ctx::LocalCtx;
 use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -236,7 +235,7 @@ impl<'a> TacticEngine<'a> {
 
         // Create subgoals for each premise (reversed so the first premise is the current goal)
         let mut subgoal_mvars: Vec<Expr> = Vec::new();
-        for (idx, (name, bi, dom)) in premises.iter().enumerate().rev() {
+        for (idx, (_name, _bi, dom)) in premises.iter().enumerate().rev() {
             let mvar_name = self.push_goal(dom.clone());
 
             // Create a lambda for the proof term
@@ -638,7 +637,7 @@ fn format_expr(e: &Expr) -> String {
         Expr::Let(name, ty, val, body, _) => {
             format!("let {} : {} := {} in {}", name.to_string(), format_expr(ty), format_expr(val), format_expr(body))
         }
-        Expr::Proj(name, idx, e) => {
+        Expr::Proj(_name, idx, e) => {
             format!("({}.proj{})", format_expr(e), idx)
         }
         Expr::MData(_, e) => format_expr(e),

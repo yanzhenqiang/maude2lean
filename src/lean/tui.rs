@@ -3,7 +3,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::cursor::{MoveTo, Show, Hide};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use std::collections::HashMap;
-use std::io::{self, stdout, Write};
+use std::io::{self, stdout};
 
 use super::environment::Environment;
 use super::expr::*;
