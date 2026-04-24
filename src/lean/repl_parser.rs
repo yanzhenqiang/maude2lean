@@ -873,6 +873,9 @@ impl Parser {
                 } else if c == ';' && paren_depth == 0 {
                     self.advance(); // consume ';'
                     break;
+                } else if c == '\n' && paren_depth == 0 {
+                    self.advance(); // consume '\n'
+                    break;
                 }
 
                 tactic_str.push(c);

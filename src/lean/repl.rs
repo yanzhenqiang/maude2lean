@@ -1373,6 +1373,43 @@ fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, in
     Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
 }
 
+/// Resolve Const references to FVar if the name exists in the current tactic goal's local context.
+fn resolve_tactic_vars(expr: &Expr, engine: &TacticEngine) -> Expr {
+    match expr {
+        Expr::Const(name, _) => {
+            if engine.current_goal().map_or(false, |g| g.lctx.find_local_decl(name).is_some()) {
+                Expr::mk_fvar(name.clone())
+            } else {
+                expr.clone()
+            }
+        }
+        Expr::App(f, a) => {
+            let new_f = resolve_tactic_vars(f, engine);
+            let new_a = resolve_tactic_vars(a, engine);
+            Expr::App(Rc::new(new_f), Rc::new(new_a))
+        }
+        Expr::Lambda(name, bi, ty, body) => {
+            let new_ty = resolve_tactic_vars(ty, engine);
+            let new_body = resolve_tactic_vars(body, engine);
+            Expr::Lambda(name.clone(), *bi, Rc::new(new_ty), Rc::new(new_body))
+        }
+        Expr::Pi(name, bi, ty, body) => {
+            let new_ty = resolve_tactic_vars(ty, engine);
+            let new_body = resolve_tactic_vars(body, engine);
+            Expr::Pi(name.clone(), *bi, Rc::new(new_ty), Rc::new(new_body))
+        }
+        Expr::Let(name, ty, value, body, nondep) => {
+            let new_ty = resolve_tactic_vars(ty, engine);
+            let new_value = resolve_tactic_vars(value, engine);
+            let new_body = resolve_tactic_vars(body, engine);
+            Expr::Let(name.clone(), Rc::new(new_ty), Rc::new(new_value), Rc::new(new_body), *nondep)
+        }
+        Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(resolve_tactic_vars(e, engine))),
+        Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(resolve_tactic_vars(e, engine))),
+        _ => expr.clone(),
+    }
+}
+
 /// Execute a single tactic command (standalone to avoid borrow conflicts)
 fn execute_tactic(
     env: &Environment,
@@ -1405,6 +1442,7 @@ fn execute_tactic(
                 return Err("exact requires an expression".to_string());
             }
             let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_exact(&expr)
         }
         "apply" => {
@@ -1412,6 +1450,7 @@ fn execute_tactic(
                 return Err("apply requires an expression".to_string());
             }
             let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_apply(&expr)
         }
         "refl" | "reflexivity" => {
@@ -1425,6 +1464,7 @@ fn execute_tactic(
                 return Err("rewrite requires an equality hypothesis".to_string());
             }
             let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_rewrite(&expr)
         }
         "induction" => {
@@ -1459,7 +1499,9 @@ fn execute_tactic(
             let proof_str = after_colon[assign_pos + 2..].trim();
 
             let ty = parse_tactic_expr(env_bindings, env, ty_str)?;
+            let ty = resolve_tactic_vars(&ty, engine);
             let proof = parse_tactic_expr(env_bindings, env, proof_str)?;
+            let proof = resolve_tactic_vars(&proof, engine);
             engine.tactic_have(&name, &ty, &proof)
         }
         _ => Err(format!("Unknown tactic: {}", tactic_name)),

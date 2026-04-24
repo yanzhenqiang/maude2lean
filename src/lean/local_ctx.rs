@@ -1,5 +1,4 @@
 use super::expr::*;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Local declaration in the context
@@ -71,7 +70,7 @@ impl LocalDecl {
 /// Local context for the kernel type checker
 #[derive(Debug, Clone)]
 pub struct LocalCtx {
-    decls: HashMap<Name, LocalDecl>,
+    decls: Vec<LocalDecl>,
     next_index: u64,
     /// Stack of binder names for BVar -> FVar conversion (index 0 = outermost)
     bvar_names: Vec<Name>,
@@ -83,7 +82,7 @@ pub struct LocalCtx {
 impl LocalCtx {
     pub fn new() -> Self {
         LocalCtx {
-            decls: HashMap::new(),
+            decls: Vec::new(),
             next_index: 0,
             bvar_names: Vec::new(),
             bvar_types: Vec::new(),
@@ -184,7 +183,7 @@ impl LocalCtx {
             ty,
             bi,
         };
-        self.decls.insert(name, decl.clone());
+        self.decls.push(decl.clone());
         decl
     }
 
@@ -199,18 +198,18 @@ impl LocalCtx {
             ty,
             value,
         };
-        self.decls.insert(name, decl.clone());
+        self.decls.push(decl.clone());
         decl
     }
 
-    /// Find a local declaration by name
+    /// Find a local declaration by name (most recent first)
     pub fn find_local_decl(&self, name: &Name) -> Option<&LocalDecl> {
-        self.decls.get(name)
+        self.decls.iter().rev().find(|d| d.get_name() == name)
     }
 
     /// Get a local declaration by name (panics if not found)
     pub fn get_local_decl(&self, name: &Name) -> &LocalDecl {
-        self.decls.get(name).expect("Local declaration not found")
+        self.find_local_decl(name).expect("Local declaration not found")
     }
 
     /// Get the type of an FVar
@@ -242,12 +241,15 @@ impl LocalCtx {
 
     /// Remove a local declaration
     pub fn clear(&mut self, decl: &LocalDecl) {
-        self.decls.remove(decl.get_name());
+        let name = decl.get_name();
+        if let Some(pos) = self.decls.iter().position(|d| d.get_name() == name) {
+            self.decls.remove(pos);
+        }
     }
 
-    /// Iterate over all local declarations
+    /// Iterate over all local declarations in insertion order
     pub fn iter_decls(&self) -> impl Iterator<Item = &LocalDecl> {
-        self.decls.values()
+        self.decls.iter()
     }
 
     /// Get the number of local declarations
