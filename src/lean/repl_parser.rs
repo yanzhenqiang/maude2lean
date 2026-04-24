@@ -834,6 +834,7 @@ impl Parser {
             if self.peek().is_none()
                 || self.starts_with_keyword("def")
                 || self.starts_with_keyword("theorem")
+                || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("inductive")
                 || self.starts_with_keyword("structure")
                 || self.starts_with_keyword("axiom")
@@ -845,15 +846,15 @@ impl Parser {
             let mut tactic_str = String::new();
             let mut paren_depth = 0;
             loop {
-                self.skip_whitespace();
                 if self.peek().is_none() {
                     break;
                 }
 
-                // Check for tactic-ending keywords
+                // Check for tactic-ending keywords at start of a token position
                 if paren_depth == 0
                     && (self.starts_with_keyword("def")
                         || self.starts_with_keyword("theorem")
+                        || self.starts_with_keyword("solve")
                         || self.starts_with_keyword("inductive")
                         || self.starts_with_keyword("structure")
                         || self.starts_with_keyword("axiom"))
@@ -883,15 +884,8 @@ impl Parser {
                 tactics.push(tactic_str);
             }
 
-            // If we hit a keyword or EOF without ';', stop
-            if self.peek().is_none()
-                || (paren_depth == 0
-                    && (self.starts_with_keyword("def")
-                        || self.starts_with_keyword("theorem")
-                        || self.starts_with_keyword("inductive")
-                        || self.starts_with_keyword("structure")
-                        || self.starts_with_keyword("axiom")))
-            {
+            // If we hit EOF without ';', stop
+            if self.peek().is_none() {
                 break;
             }
         }

@@ -775,9 +775,35 @@ impl Repl {
             bound_vars.push(pname.clone());
         }
 
-        // Convert return type and value
+        // Convert return type
         let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
-        let value_expr = value.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+
+        // Handle tactic block for solve (like theorem does)
+        let value_expr = match &value {
+            ParsedExpr::TacticBlock(tactics) => {
+                let mut target_expr = ret_ty_expr.clone();
+                // Wrap target with parameter types as Pi binders
+                for (pname, pty) in param_exprs.iter().rev() {
+                    target_expr = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(target_expr));
+                }
+
+                let env = &self.env;
+                let env_bindings = &self.env_bindings;
+                let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
+
+                for tactic_cmd in tactics {
+                    execute_tactic(env, env_bindings, &mut engine, tactic_cmd)?;
+                }
+
+                if engine.num_goals() > 0 {
+                    return Err(format!("Unsolved goals remaining: {}", engine.num_goals()));
+                }
+
+                let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
+                engine.build_proof(&root_mvar)
+            }
+            _ => value.to_expr(&self.env_bindings, &self.env, &mut bound_vars),
+        };
 
         // Embed params into value as lambdas
         let mut final_value = value_expr;
