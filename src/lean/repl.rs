@@ -720,17 +720,48 @@ impl Repl {
         };
 
         if is_theorem {
-            let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+            // Type-check in relaxed mode (allows unassigned metavariables during solving)
+            let mut tc = TypeChecker::with_allow_unassigned_mvar(&mut self.tc_state, super::local_ctx::LocalCtx::new());
             tc.check(&final_value, &final_ty)
                 .map_err(|e| format!("Proof does not match theorem type: {}", e))?;
 
+            // Collect solve-variable info: gather all MVars from value and type
+            let mut mvar_names = Vec::new();
+            final_value.collect_mvars(&mut mvar_names);
+            final_ty.collect_mvars(&mut mvar_names);
+
+            let mut solve_vars: Vec<(Name, Expr, Option<Expr>)> = Vec::new();
+            for mvar_name in &mvar_names {
+                let mut ty = self.tc_state.get_mvar_type(mvar_name).cloned();
+                let assignment = self.tc_state.get_mvar_assignment(mvar_name).cloned();
+                if ty.is_none() {
+                    if let Some(ref val) = assignment {
+                        let mut tc = TypeChecker::with_allow_unassigned_mvar(
+                            &mut self.tc_state, super::local_ctx::LocalCtx::new());
+                        ty = tc.infer(val).ok();
+                    }
+                }
+                if let Some(t) = ty {
+                    solve_vars.push((mvar_name.clone(), t, assignment));
+                }
+            }
+
+            // Theorem requires all metavariables to be assigned
+            let unassigned: Vec<_> = solve_vars.iter().filter(|(_, _, val)| val.is_none()).collect();
+            if !unassigned.is_empty() {
+                let names = unassigned.iter()
+                    .map(|(n, ty, _)| format!("?{} : {}", n.to_string(), format_expr(ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("Theorem has unassigned solve variables: {}", names));
+            }
             let decl = Declaration::Theorem(TheoremVal {
                 constant_val: ConstantVal {
                     name: Name::new(&name),
                     level_params: vec![],
                     ty: final_ty,
                 },
-                value: final_value,
+                value: final_value.clone(),
             });
             self.env.add(decl).map_err(|e| e)?;
             self.tc_state = TypeCheckerState::new(self.env.clone());
@@ -867,9 +898,8 @@ impl Repl {
             }
         }
 
-        // Optionally register as an opaque definition for later reference
-        // For now, we just bind the name to its value in env_bindings
-        self.env_bindings.insert(name.clone(), final_value.clone());
+        // Solve is a one-shot derivation check: its result is never registered
+        // for later reference. Use theorem for permanent declarations.
 
         Ok(())
     }
