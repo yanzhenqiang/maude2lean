@@ -1,7 +1,7 @@
 use std::hash::Hash;
 use std::rc::Rc;
 
-/// Lean names are hierarchical, e.g., `Nat.add`, `_root_.Foo.bar`
+/// Hierarchical names, e.g., `Nat.add`, `_root_.Foo.bar`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Name(pub Vec<String>);
 
@@ -61,14 +61,6 @@ impl Level {
         matches!(self, Level::Succ(_))
     }
 
-    pub fn is_max(&self) -> bool {
-        matches!(self, Level::Max(_, _))
-    }
-
-    pub fn is_imax(&self) -> bool {
-        matches!(self, Level::IMax(_, _))
-    }
-
     pub fn succ_of(&self) -> Option<&Level> {
         match self {
             Level::Succ(l) => Some(l),
@@ -100,7 +92,6 @@ impl Level {
         }
     }
 
-    /// Normalize a level expression
     pub fn normalize(&self) -> Level {
         match self {
             Level::Zero => Level::Zero,
@@ -130,12 +121,10 @@ impl Level {
         }
     }
 
-    /// Check if two levels are equivalent (after normalization)
     pub fn is_equivalent(&self, other: &Level) -> bool {
         self.normalize() == other.normalize()
     }
 
-    /// Convert explicit level to unsigned integer
     pub fn to_explicit(&self) -> Option<u32> {
         match self {
             Level::Zero => Some(0),
@@ -144,7 +133,6 @@ impl Level {
         }
     }
 
-    /// Check if this level is greater than or equal to another
     pub fn is_geq(&self, other: &Level) -> bool {
         let n1 = self.normalize();
         let n2 = other.normalize();
@@ -158,14 +146,9 @@ fn is_geq_core(l1: &Level, l2: &Level) -> bool {
         (Level::Zero, _) => false,
         (Level::Succ(a), Level::Succ(b)) => is_geq_core(a, b),
         (Level::Max(a, b), _) => is_geq_core(a, l2) || is_geq_core(b, l2),
-        (Level::IMax(_a, b), _) => {
-            // imax(a, b) >= l2 iff b >= l2 (when b >= 1)
-            // or if a >= l2 and b >= l2
-            is_geq_core(b, l2)
-        }
+        (Level::IMax(_a, b), _) => is_geq_core(b, l2),
         (Level::Param(p1), Level::Param(p2)) => p1 == p2,
         (l, Level::Param(_)) => {
-            // Check if l contains the param and is larger
             if let Some(n) = l.to_explicit() {
                 n > 0
             } else {
@@ -183,7 +166,6 @@ pub enum BinderInfo {
     Implicit,
     StrictImplicit,
     InstImplicit,
-    Rec,
 }
 
 impl BinderInfo {
@@ -196,47 +178,30 @@ impl BinderInfo {
     }
 }
 
-/// Literal values
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Literal {
-    Nat(u64),
-    String(String),
-}
-
-/// Lean expressions
-/// Based on Lean 4 kernel's `expr.h`
+/// Core expression syntax for TTobs (Observational Type Theory)
+/// Based on Pujet & Tabareau, POPL 2022, Figure 1
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// Bound variable (de Bruijn index)
     BVar(u64),
-    /// Free variable (local variable)
+    /// Free variable (local variable, implementation detail)
     FVar(Name),
-    /// Metavariable
-    MVar(Name),
-    /// Universe sort: Sort u
-    Sort(Level),
     /// Constant reference: c.{us}
     Const(Name, Vec<Level>),
     /// Application: f a
     App(Rc<Expr>, Rc<Expr>),
-    /// Lambda abstraction: λ (x : t). b
+    /// Lambda abstraction: λ (x : A). b
     Lambda(Name, BinderInfo, Rc<Expr>, Rc<Expr>),
-    /// Dependent arrow: Π (x : t). b
+    /// Dependent product: Π (x : A). B
     Pi(Name, BinderInfo, Rc<Expr>, Rc<Expr>),
-    /// Let expression: let x : t := v in b
-    Let(Name, Rc<Expr>, Rc<Expr>, Rc<Expr>, bool),
-    /// Literal value
-    Lit(Literal),
-    /// Metadata
-    MData(Rc<MData>, Rc<Expr>),
-    /// Projection
-    Proj(Name, u64, Rc<Expr>),
-}
-
-/// Metadata map (simplified)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MData {
-    pub data: Vec<(String, Expr)>,
+    /// Proof-relevant universe: U_i
+    U(Level),
+    /// Proof-irrelevant universe: Ω_i
+    Omega(Level),
+    /// Observational equality: t ~_A u  (stored as Eq(A, t, u))
+    Eq(Rc<Expr>, Rc<Expr>, Rc<Expr>),
+    /// Cast: cast(A, B, e, t)
+    Cast(Rc<Expr>, Rc<Expr>, Rc<Expr>, Rc<Expr>),
 }
 
 impl Expr {
@@ -247,14 +212,6 @@ impl Expr {
 
     pub fn mk_fvar(name: Name) -> Expr {
         Expr::FVar(name)
-    }
-
-    pub fn mk_mvar(name: Name) -> Expr {
-        Expr::MVar(name)
-    }
-
-    pub fn mk_sort(level: Level) -> Expr {
-        Expr::Sort(level)
     }
 
     pub fn mk_const(name: Name, levels: Vec<Level>) -> Expr {
@@ -277,34 +234,34 @@ impl Expr {
         Expr::Pi(Name::new("_"), BinderInfo::Default, Rc::new(domain), Rc::new(codomain))
     }
 
-    pub fn mk_let(name: Name, ty: Expr, value: Expr, body: Expr) -> Expr {
-        Expr::Let(name, Rc::new(ty), Rc::new(value), Rc::new(body), false)
+    pub fn mk_u(level: Level) -> Expr {
+        Expr::U(level)
     }
 
-    pub fn mk_lit(lit: Literal) -> Expr {
-        Expr::Lit(lit)
+    pub fn mk_omega(level: Level) -> Expr {
+        Expr::Omega(level)
     }
 
-    pub fn mk_prop() -> Expr {
-        Expr::Sort(Level::Zero)
+    pub fn mk_eq(a: Expr, t: Expr, u: Expr) -> Expr {
+        Expr::Eq(Rc::new(a), Rc::new(t), Rc::new(u))
     }
 
-    pub fn mk_type() -> Expr {
-        Expr::Sort(Level::mk_succ(Level::Zero))
+    pub fn mk_cast(a: Expr, b: Expr, e: Expr, t: Expr) -> Expr {
+        Expr::Cast(Rc::new(a), Rc::new(b), Rc::new(e), Rc::new(t))
     }
 
     // Tests
     pub fn is_bvar(&self) -> bool { matches!(self, Expr::BVar(_)) }
     pub fn is_fvar(&self) -> bool { matches!(self, Expr::FVar(_)) }
-    pub fn is_mvar(&self) -> bool { matches!(self, Expr::MVar(_)) }
-    pub fn is_sort(&self) -> bool { matches!(self, Expr::Sort(_)) }
     pub fn is_const(&self) -> bool { matches!(self, Expr::Const(_, _)) }
     pub fn is_app(&self) -> bool { matches!(self, Expr::App(_, _)) }
     pub fn is_lambda(&self) -> bool { matches!(self, Expr::Lambda(_, _, _, _)) }
     pub fn is_pi(&self) -> bool { matches!(self, Expr::Pi(_, _, _, _)) }
-    pub fn is_let(&self) -> bool { matches!(self, Expr::Let(_, _, _, _, _)) }
-    pub fn is_lit(&self) -> bool { matches!(self, Expr::Lit(_)) }
-    pub fn is_proj(&self) -> bool { matches!(self, Expr::Proj(_, _, _)) }
+    pub fn is_u(&self) -> bool { matches!(self, Expr::U(_)) }
+    pub fn is_omega(&self) -> bool { matches!(self, Expr::Omega(_)) }
+    pub fn is_eq(&self) -> bool { matches!(self, Expr::Eq(_, _, _)) }
+    pub fn is_cast(&self) -> bool { matches!(self, Expr::Cast(_, _, _, _)) }
+    pub fn is_sort(&self) -> bool { matches!(self, Expr::U(_) | Expr::Omega(_)) }
 
     // Accessors
     pub fn app_fn(&self) -> Option<&Expr> {
@@ -344,7 +301,7 @@ impl Expr {
 
     pub fn binding_name(&self) -> Option<&Name> {
         match self {
-            Expr::Lambda(n, _, _, _) | Expr::Pi(n, _, _, _) | Expr::Let(n, _, _, _, _) => Some(n),
+            Expr::Lambda(n, _, _, _) | Expr::Pi(n, _, _, _) => Some(n),
             _ => None,
         }
     }
@@ -363,23 +320,52 @@ impl Expr {
         }
     }
 
-    pub fn let_type(&self) -> Option<&Expr> {
+    pub fn eq_type(&self) -> Option<&Expr> {
         match self {
-            Expr::Let(_, t, _, _, _) => Some(t),
+            Expr::Eq(a, _, _) => Some(a),
             _ => None,
         }
     }
 
-    pub fn let_value(&self) -> Option<&Expr> {
+    pub fn eq_lhs(&self) -> Option<&Expr> {
         match self {
-            Expr::Let(_, _, v, _, _) => Some(v),
+            Expr::Eq(_, t, _) => Some(t),
+            _ => None,
+        }
+
+    }
+
+    pub fn eq_rhs(&self) -> Option<&Expr> {
+        match self {
+            Expr::Eq(_, _, u) => Some(u),
             _ => None,
         }
     }
 
-    pub fn let_body(&self) -> Option<&Expr> {
+    pub fn cast_src(&self) -> Option<&Expr> {
         match self {
-            Expr::Let(_, _, _, b, _) => Some(b),
+            Expr::Cast(a, _, _, _) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn cast_dst(&self) -> Option<&Expr> {
+        match self {
+            Expr::Cast(_, b, _, _) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn cast_proof(&self) -> Option<&Expr> {
+        match self {
+            Expr::Cast(_, _, e, _) => Some(e),
+            _ => None,
+        }
+    }
+
+    pub fn cast_term(&self) -> Option<&Expr> {
+        match self {
+            Expr::Cast(_, _, _, t) => Some(t),
             _ => None,
         }
     }
@@ -426,10 +412,10 @@ impl Expr {
                     self.clone()
                 }
             }
-            Expr::Sort(l) => Expr::Sort(l.clone()),
+            Expr::U(l) => Expr::U(l.clone()),
+            Expr::Omega(l) => Expr::Omega(l.clone()),
             Expr::Const(name, levels) => Expr::Const(name.clone(), levels.clone()),
             Expr::FVar(name) => Expr::FVar(name.clone()),
-            Expr::MVar(name) => Expr::MVar(name.clone()),
             Expr::App(f, a) => {
                 Expr::App(
                     Rc::new(f.lift_loose_bvars(n, threshold)),
@@ -452,23 +438,21 @@ impl Expr {
                     Rc::new(body.lift_loose_bvars(n, threshold + 1)),
                 )
             }
-            Expr::Let(name, ty, value, body, nondep) => {
-                Expr::Let(
-                    name.clone(),
-                    Rc::new(ty.lift_loose_bvars(n, threshold)),
-                    Rc::new(value.lift_loose_bvars(n, threshold)),
-                    Rc::new(body.lift_loose_bvars(n, threshold + 1)),
-                    *nondep,
-                )
-            }
-            Expr::Lit(lit) => Expr::Lit(lit.clone()),
-            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(e.lift_loose_bvars(n, threshold))),
-            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(e.lift_loose_bvars(n, threshold))),
+            Expr::Eq(a, t, u) => Expr::Eq(
+                Rc::new(a.lift_loose_bvars(n, threshold)),
+                Rc::new(t.lift_loose_bvars(n, threshold)),
+                Rc::new(u.lift_loose_bvars(n, threshold)),
+            ),
+            Expr::Cast(a, b, e, t) => Expr::Cast(
+                Rc::new(a.lift_loose_bvars(n, threshold)),
+                Rc::new(b.lift_loose_bvars(n, threshold)),
+                Rc::new(e.lift_loose_bvars(n, threshold)),
+                Rc::new(t.lift_loose_bvars(n, threshold)),
+            ),
         }
     }
 
     /// Abstract a free variable into a bound variable.
-    /// Replace occurrences of `fvar_name` with `BVar(depth)` and lift existing BVars accordingly.
     pub fn abstract_fvar(&self, fvar_name: &Name, depth: u64) -> Expr {
         match self {
             Expr::FVar(name) => {
@@ -485,9 +469,9 @@ impl Expr {
                     self.clone()
                 }
             }
-            Expr::Sort(l) => Expr::Sort(l.clone()),
+            Expr::U(l) => Expr::U(l.clone()),
+            Expr::Omega(l) => Expr::Omega(l.clone()),
             Expr::Const(name, levels) => Expr::Const(name.clone(), levels.clone()),
-            Expr::MVar(name) => Expr::MVar(name.clone()),
             Expr::App(f, a) => {
                 Expr::App(
                     Rc::new(f.abstract_fvar(fvar_name, depth)),
@@ -510,18 +494,17 @@ impl Expr {
                     Rc::new(body.abstract_fvar(fvar_name, depth + 1)),
                 )
             }
-            Expr::Let(name, ty, value, body, nondep) => {
-                Expr::Let(
-                    name.clone(),
-                    Rc::new(ty.abstract_fvar(fvar_name, depth)),
-                    Rc::new(value.abstract_fvar(fvar_name, depth)),
-                    Rc::new(body.abstract_fvar(fvar_name, depth + 1)),
-                    *nondep,
-                )
-            }
-            Expr::Lit(lit) => Expr::Lit(lit.clone()),
-            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(e.abstract_fvar(fvar_name, depth))),
-            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(e.abstract_fvar(fvar_name, depth))),
+            Expr::Eq(a, t, u) => Expr::Eq(
+                Rc::new(a.abstract_fvar(fvar_name, depth)),
+                Rc::new(t.abstract_fvar(fvar_name, depth)),
+                Rc::new(u.abstract_fvar(fvar_name, depth)),
+            ),
+            Expr::Cast(a, b, e, t) => Expr::Cast(
+                Rc::new(a.abstract_fvar(fvar_name, depth)),
+                Rc::new(b.abstract_fvar(fvar_name, depth)),
+                Rc::new(e.abstract_fvar(fvar_name, depth)),
+                Rc::new(t.abstract_fvar(fvar_name, depth)),
+            ),
         }
     }
 
@@ -541,10 +524,10 @@ impl Expr {
                     self.clone()
                 }
             }
-            Expr::Sort(l) => Expr::Sort(l.clone()),
+            Expr::U(l) => Expr::U(l.clone()),
+            Expr::Omega(l) => Expr::Omega(l.clone()),
             Expr::Const(name, levels) => Expr::Const(name.clone(), levels.clone()),
             Expr::FVar(name) => Expr::FVar(name.clone()),
-            Expr::MVar(name) => Expr::MVar(name.clone()),
             Expr::App(f, a) => {
                 Expr::App(
                     Rc::new(f.instantiate_range(subst, offset)),
@@ -567,18 +550,17 @@ impl Expr {
                     Rc::new(body.instantiate_range(subst, offset + 1)),
                 )
             }
-            Expr::Let(name, ty, value, body, nondep) => {
-                Expr::Let(
-                    name.clone(),
-                    Rc::new(ty.instantiate_range(subst, offset)),
-                    Rc::new(value.instantiate_range(subst, offset)),
-                    Rc::new(body.instantiate_range(subst, offset + 1)),
-                    *nondep,
-                )
-            }
-            Expr::Lit(lit) => Expr::Lit(lit.clone()),
-            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(e.instantiate_range(subst, offset))),
-            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(e.instantiate_range(subst, offset))),
+            Expr::Eq(a, t, u) => Expr::Eq(
+                Rc::new(a.instantiate_range(subst, offset)),
+                Rc::new(t.instantiate_range(subst, offset)),
+                Rc::new(u.instantiate_range(subst, offset)),
+            ),
+            Expr::Cast(a, b, e, t) => Expr::Cast(
+                Rc::new(a.instantiate_range(subst, offset)),
+                Rc::new(b.instantiate_range(subst, offset)),
+                Rc::new(e.instantiate_range(subst, offset)),
+                Rc::new(t.instantiate_range(subst, offset)),
+            ),
         }
     }
 
@@ -589,43 +571,8 @@ impl Expr {
             Expr::App(f, a) => f.has_loose_bvar(idx) || a.has_loose_bvar(idx),
             Expr::Lambda(_, _, ty, body) => ty.has_loose_bvar(idx) || body.has_loose_bvar(idx + 1),
             Expr::Pi(_, _, ty, body) => ty.has_loose_bvar(idx) || body.has_loose_bvar(idx + 1),
-            Expr::Let(_, ty, value, body, _) => {
-                ty.has_loose_bvar(idx) || value.has_loose_bvar(idx) || body.has_loose_bvar(idx + 1)
-            }
-            Expr::MData(_, e) => e.has_loose_bvar(idx),
-            Expr::Proj(_, _, e) => e.has_loose_bvar(idx),
-            _ => false,
-        }
-    }
-
-    /// Check if expression contains any metavariables
-    pub fn has_expr_mvar(&self) -> bool {
-        match self {
-            Expr::MVar(_) => true,
-            Expr::App(f, a) => f.has_expr_mvar() || a.has_expr_mvar(),
-            Expr::Lambda(_, _, ty, body) => ty.has_expr_mvar() || body.has_expr_mvar(),
-            Expr::Pi(_, _, ty, body) => ty.has_expr_mvar() || body.has_expr_mvar(),
-            Expr::Let(_, ty, value, body, _) => {
-                ty.has_expr_mvar() || value.has_expr_mvar() || body.has_expr_mvar()
-            }
-            Expr::MData(_, e) => e.has_expr_mvar(),
-            Expr::Proj(_, _, e) => e.has_expr_mvar(),
-            _ => false,
-        }
-    }
-
-    /// Check if expression contains a specific named metavariable
-    pub fn has_mvar_named(&self, name: &Name) -> bool {
-        match self {
-            Expr::MVar(n) => n == name,
-            Expr::App(f, a) => f.has_mvar_named(name) || a.has_mvar_named(name),
-            Expr::Lambda(_, _, ty, body) => ty.has_mvar_named(name) || body.has_mvar_named(name),
-            Expr::Pi(_, _, ty, body) => ty.has_mvar_named(name) || body.has_mvar_named(name),
-            Expr::Let(_, ty, value, body, _) => {
-                ty.has_mvar_named(name) || value.has_mvar_named(name) || body.has_mvar_named(name)
-            }
-            Expr::MData(_, e) => e.has_mvar_named(name),
-            Expr::Proj(_, _, e) => e.has_mvar_named(name),
+            Expr::Eq(a, t, u) => a.has_loose_bvar(idx) || t.has_loose_bvar(idx) || u.has_loose_bvar(idx),
+            Expr::Cast(a, b, e, t) => a.has_loose_bvar(idx) || b.has_loose_bvar(idx) || e.has_loose_bvar(idx) || t.has_loose_bvar(idx),
             _ => false,
         }
     }
@@ -637,18 +584,26 @@ impl Expr {
             Expr::App(f, a) => f.has_fvar() || a.has_fvar(),
             Expr::Lambda(_, _, ty, body) => ty.has_fvar() || body.has_fvar(),
             Expr::Pi(_, _, ty, body) => ty.has_fvar() || body.has_fvar(),
-            Expr::Let(_, ty, value, body, _) => {
-                ty.has_fvar() || value.has_fvar() || body.has_fvar()
-            }
-            Expr::MData(_, e) => e.has_fvar(),
-            Expr::Proj(_, _, e) => e.has_fvar(),
+            Expr::Eq(a, t, u) => a.has_fvar() || t.has_fvar() || u.has_fvar(),
+            Expr::Cast(a, b, e, t) => a.has_fvar() || b.has_fvar() || e.has_fvar() || t.has_fvar(),
+            _ => false,
+        }
+    }
+
+    /// Check if expression contains a Const with the given name.
+    pub fn contains_const(&self, name: &Name) -> bool {
+        match self {
+            Expr::Const(n, _) => n == name,
+            Expr::App(f, a) => f.contains_const(name) || a.contains_const(name),
+            Expr::Lambda(_, _, ty, body) => ty.contains_const(name) || body.contains_const(name),
+            Expr::Pi(_, _, ty, body) => ty.contains_const(name) || body.contains_const(name),
+            Expr::Eq(a, t, u) => a.contains_const(name) || t.contains_const(name) || u.contains_const(name),
+            Expr::Cast(a, b, e, t) => a.contains_const(name) || b.contains_const(name) || e.contains_const(name) || t.contains_const(name),
             _ => false,
         }
     }
 
     /// Strip the first `n` Pi binders and instantiate their bound variables with the given arguments.
-    /// Given `Pi(x1,T1, Pi(x2,T2, ... body))` and args `[a1, a2, ...]`,
-    /// returns `body[a1/x1][a2/x2]...`.
     pub fn apply_pi_binders(&self, args: &[Expr]) -> Option<Expr> {
         let mut result = self.clone();
         for arg in args {
@@ -684,15 +639,17 @@ impl Expr {
                 Rc::new(ty.replace_expr(target, replacement)),
                 Rc::new(body.replace_expr(target, replacement)),
             ),
-            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
-                name.clone(),
-                Rc::new(ty.replace_expr(target, replacement)),
-                Rc::new(value.replace_expr(target, replacement)),
-                Rc::new(body.replace_expr(target, replacement)),
-                *nondep,
+            Expr::Eq(a, t, u) => Expr::Eq(
+                Rc::new(a.replace_expr(target, replacement)),
+                Rc::new(t.replace_expr(target, replacement)),
+                Rc::new(u.replace_expr(target, replacement)),
             ),
-            Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(e.replace_expr(target, replacement))),
-            Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(e.replace_expr(target, replacement))),
+            Expr::Cast(a, b, e, t) => Expr::Cast(
+                Rc::new(a.replace_expr(target, replacement)),
+                Rc::new(b.replace_expr(target, replacement)),
+                Rc::new(e.replace_expr(target, replacement)),
+                Rc::new(t.replace_expr(target, replacement)),
+            ),
             _ => self.clone(),
         }
     }
@@ -710,34 +667,15 @@ mod tests {
 
     #[test]
     fn test_level_normalize() {
-        // max(0, u) = u
         let l = Level::mk_max(Level::Zero, Level::Param(Name::new("u")));
         assert_eq!(l.normalize(), Level::Param(Name::new("u")));
 
-        // imax(u, 0) = 0
         let l = Level::mk_imax(Level::Param(Name::new("u")), Level::Zero);
         assert_eq!(l.normalize(), Level::Zero);
-
-        // succ(max(a,b)) = max(succ(a), succ(b))
-        let l = Level::mk_succ(Level::mk_max(Level::Param(Name::new("a")), Level::Param(Name::new("b"))));
-        let expected = Level::mk_max(
-            Level::mk_succ(Level::Param(Name::new("a"))),
-            Level::mk_succ(Level::Param(Name::new("b"))),
-        ).normalize();
-        assert_eq!(l.normalize(), expected);
-    }
-
-    #[test]
-    fn test_level_equivalent() {
-        let a = Level::mk_max(Level::Zero, Level::Param(Name::new("u")));
-        let b = Level::Param(Name::new("u"));
-        assert!(a.is_equivalent(&b));
     }
 
     #[test]
     fn test_expr_instantiate_bvar() {
-        // Substitute BVar(0) with `a` in App(BVar(0), BVar(1))
-        // Result should be App(a, BVar(0))
         let a = Expr::mk_const(Name::new("a"), vec![]);
         let e = Expr::App(Rc::new(Expr::BVar(0)), Rc::new(Expr::BVar(1)));
         let result = e.instantiate(&a);
@@ -752,12 +690,10 @@ mod tests {
 
     #[test]
     fn test_expr_lift_loose_bvars() {
-        // Lift BVar(1) by 1 starting at threshold 1 -> BVar(2)
         let e = Expr::BVar(1);
         let result = e.lift_loose_bvars(1, 1);
         assert_eq!(result, Expr::BVar(2));
 
-        // BVar(0) stays unchanged when threshold is 1
         let e = Expr::BVar(0);
         let result = e.lift_loose_bvars(1, 1);
         assert_eq!(result, Expr::BVar(0));
@@ -796,5 +732,29 @@ mod tests {
             }
             _ => panic!("Expected Pi"),
         }
+    }
+
+    #[test]
+    fn test_mk_eq() {
+        let a = Expr::mk_const(Name::new("A"), vec![]);
+        let t = Expr::mk_const(Name::new("t"), vec![]);
+        let u = Expr::mk_const(Name::new("u"), vec![]);
+        let eq = Expr::mk_eq(a.clone(), t.clone(), u.clone());
+        assert_eq!(eq.eq_type(), Some(&a));
+        assert_eq!(eq.eq_lhs(), Some(&t));
+        assert_eq!(eq.eq_rhs(), Some(&u));
+    }
+
+    #[test]
+    fn test_mk_cast() {
+        let a = Expr::mk_const(Name::new("A"), vec![]);
+        let b = Expr::mk_const(Name::new("B"), vec![]);
+        let e = Expr::mk_const(Name::new("e"), vec![]);
+        let t = Expr::mk_const(Name::new("t"), vec![]);
+        let cast = Expr::mk_cast(a.clone(), b.clone(), e.clone(), t.clone());
+        assert_eq!(cast.cast_src(), Some(&a));
+        assert_eq!(cast.cast_dst(), Some(&b));
+        assert_eq!(cast.cast_proof(), Some(&e));
+        assert_eq!(cast.cast_term(), Some(&t));
     }
 }

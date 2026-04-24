@@ -1,0 +1,17 @@
+-- Nat 序关系
+-- le 作为公理化索引归纳族
+
+axiom le : Nat -> Nat -> Omega
+axiom le.zero : forall (n : Nat), le zero n
+axiom le.succ : forall (m : Nat), forall (n : Nat), le m n -> le (succ m) (succ n)
+axiom le.rec : forall (C : Nat -> Nat -> Omega),
+  (forall (n : Nat), C zero n) ->
+  (forall (m : Nat), forall (n : Nat), le m n -> C m n -> C (succ m) (succ n)) ->
+  forall (m : Nat), forall (n : Nat), le m n -> C m n
+
+def lt (m : Nat) (n : Nat) : Omega := le (succ m) n
+def ge (m : Nat) (n : Nat) : Omega := le n m
+def gt (m : Nat) (n : Nat) : Omega := lt n m
+
+-- Nat 绝对值（恒等，因为 Nat 无负数）
+def abs_nat (n : Nat) : Nat := n

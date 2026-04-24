@@ -1,0 +1,16 @@
+-- Leibniz 等同（公理化索引归纳族）
+-- 注意：内核有观测等同 Eq，但那是不同的概念
+-- 这里使用 Leibniz Eq 以兼容原有证明链
+
+axiom Eq : forall (A : U), A -> A -> Omega
+axiom Eq.refl : forall (A : U), forall (a : A), Eq A a a
+axiom Eq.rec : forall (A : U), forall (a : A), forall (C : A -> Omega),
+  C a -> forall (b : A), forall (h : Eq A a b), C b
+
+def refl (A : U) (a : A) : Eq A a a := Eq.refl A a
+
+def eq_subst (A : U) (a : A) (b : A) (P : A -> Omega) (h : Eq A a b) (pa : P a) : P b :=
+  Eq.rec A a P pa b h
+
+def eq_sym (A : U) (a : A) (b : A) (h : Eq A a b) : Eq A b a :=
+  eq_subst A a b (fun y : A => Eq A y a) h (refl A a)

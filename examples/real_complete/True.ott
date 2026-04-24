@@ -1,0 +1,14 @@
+-- 命题逻辑基础
+
+inductive True : Omega where
+  | trivial : True
+
+inductive False : Omega where
+
+axiom Or : Omega -> Omega -> Omega
+axiom Or.inl : forall (A : Omega), forall (B : Omega), A -> Or A B
+axiom Or.inr : forall (A : Omega), forall (B : Omega), B -> Or A B
+axiom Or.rec : forall (A : Omega), forall (B : Omega), forall (C : Omega),
+  (A -> C) -> (B -> C) -> Or A B -> C
+
+def Not (A : Omega) : Omega := A -> False

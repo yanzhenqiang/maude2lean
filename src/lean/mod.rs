@@ -3,7 +3,6 @@ pub mod declaration;
 pub mod environment;
 pub mod local_ctx;
 pub mod type_checker;
-pub mod tactic;
+pub mod kernel_ext;
 pub mod repl;
 pub mod repl_parser;
-pub mod tui;

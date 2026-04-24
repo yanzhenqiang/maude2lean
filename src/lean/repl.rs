@@ -1,25 +1,25 @@
 use super::declaration::*;
 use super::environment::Environment;
 use super::expr::*;
-use super::repl_parser::{ParsedDecl, ParsedExpr, Parser as ReplParser};
-use super::tactic::TacticEngine;
+use super::repl_parser::{ParsedDecl, Parser as ReplParser};
+use super::kernel_ext::{ConstructorInfo, RecursorInfo};
 use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::rc::Rc;
 
-/// Interactive Lean REPL.
+/// Interactive TTobs REPL.
 ///
 /// Commands:
 ///   :env                          Show current environment
-///   :load <file.lean>             Load declarations from a file
+///   :load <file.ott>              Load declarations from a file
 ///   :axiom <name> : <type>        Add an axiom
 ///   :def <name> := <value>        Add a definition (type inferred)
 ///   :def <name> : <type> := <value>  Add a definition with explicit type
 ///   :theorem <name> : <type> := <proof>  Add a theorem
-///   :inductive <name> | <ctor> : <type> | ...   Add an inductive type
 ///   :infer <expr>                 Infer the type of an expression
+///   :check <expr> : <type>        Check expression against type
 ///   :reduce <expr>                Reduce to weak head normal form
 ///   :nf <expr>                    Reduce to full normal form
 ///   :defeq <e1> = <e2>            Check definitional equality
@@ -33,149 +33,32 @@ pub struct Repl {
     quiet: bool,
 }
 
-/// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
-/// inductive type being defined appears in `args`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct NestedOccurrence {
-    outer_name: Name,
-    args: Vec<Expr>,
-}
-
-impl NestedOccurrence {
-    fn to_expr(&self) -> Expr {
-        let mut result = Expr::mk_const(self.outer_name.clone(), vec![]);
-        for arg in &self.args {
-            result = Expr::mk_app(result, arg.clone());
-        }
-        result
-    }
-}
-
-/// Find all nested occurrences of `ind_name` in `e`.
-/// A nested occurrence is when `ind_name` appears as an argument to another type constructor.
-fn find_nested_occurrences(e: &Expr, ind_name: &Name, out: &mut Vec<NestedOccurrence>) {
-    match e {
-        Expr::App(f, a) => {
-            // Check if this application spine has `ind_name` as an argument
-            let mut spine: Vec<Expr> = vec![(**a).clone()];
-            let mut head = f;
-            while let Expr::App(f2, a2) = head.as_ref() {
-                spine.push((**a2).clone());
-                head = f2;
-            }
-            spine.reverse();
-            if let Expr::Const(cname, _) = head.as_ref() {
-                if *cname != *ind_name && spine.iter().any(|arg| contains_const(arg, ind_name)) {
-                    out.push(NestedOccurrence {
-                        outer_name: cname.clone(),
-                        args: spine,
-                    });
-                    return; // Don't recurse into found occurrences
-                }
-            }
-            // Recurse into subexpressions
-            find_nested_occurrences(f, ind_name, out);
-            find_nested_occurrences(a, ind_name, out);
-        }
-        Expr::Lambda(_, _, ty, body) |
-        Expr::Pi(_, _, ty, body) => {
-            find_nested_occurrences(ty, ind_name, out);
-            find_nested_occurrences(body, ind_name, out);
-        }
-        Expr::Let(_, ty, value, body, _) => {
-            find_nested_occurrences(ty, ind_name, out);
-            find_nested_occurrences(value, ind_name, out);
-            find_nested_occurrences(body, ind_name, out);
-        }
-        Expr::MData(_, e) |
-        Expr::Proj(_, _, e) => {
-            find_nested_occurrences(e, ind_name, out);
-        }
-        _ => {}
-    }
-}
-
-fn contains_const(e: &Expr, name: &Name) -> bool {
-    match e {
-        Expr::Const(cname, _) => cname == name,
-        Expr::App(f, a) => contains_const(f, name) || contains_const(a, name),
-        Expr::Lambda(_, _, ty, body) |
-        Expr::Pi(_, _, ty, body) => contains_const(ty, name) || contains_const(body, name),
-        Expr::Let(_, ty, value, body, _) => {
-            contains_const(ty, name) || contains_const(value, name) || contains_const(body, name)
-        }
-        Expr::MData(_, e) |
-        Expr::Proj(_, _, e) => contains_const(e, name),
-        _ => false,
-    }
-}
-
 impl Repl {
     pub fn new() -> Self {
         let env = Environment::new();
-        let tc_state = TypeCheckerState::new(env.clone());
-        let mut repl = Repl {
+        let mut tc_state = TypeCheckerState::new(env.clone());
+
+        // Register quotient primitives
+        for name in [
+            Name::new("Quot"),
+            Name::new("Quot").extend("mk"),
+            Name::new("Quot").extend("lift"),
+            Name::new("Quot").extend("ind"),
+            Name::new("Quot").extend("sound"),
+        ] {
+            tc_state.register_quot(name);
+        }
+
+        Repl {
             env,
             tc_state,
             env_bindings: HashMap::new(),
             quiet: false,
-        };
-        repl.load_quot();
-        repl
+        }
     }
 
     pub fn set_quiet(&mut self, quiet: bool) {
         self.quiet = quiet;
-    }
-
-    /// Generate an auxiliary inductive type for a nested occurrence.
-    /// Given `App(App(Const(C), arg1), arg2)` where one arg is the inductive type,
-    /// creates an inductive that mirrors `C` but with the inductive type fixed.
-    fn generate_aux_inductive(&self, occ: &NestedOccurrence, aux_name: &Name) -> Result<InductiveType, String> {
-        let info = self.env.find(&occ.outer_name)
-            .ok_or_else(|| format!("Nested type constructor not found: {}", occ.outer_name.to_string()))?;
-        let ind_val = info.to_inductive_val()
-            .ok_or_else(|| format!("Not an inductive type: {}", occ.outer_name.to_string()))?;
-
-        if occ.args.len() != ind_val.num_params as usize {
-            return Err(format!(
-                "Nested inductive {} applied to {} args but expects {}",
-                occ.outer_name.to_string(), occ.args.len(), ind_val.num_params
-            ));
-        }
-
-        let occ_expr = occ.to_expr();
-        let mut aux_ctors = Vec::new();
-
-        for ctor_name in &ind_val.ctors {
-            let ctor_info = self.env.find(ctor_name)
-                .ok_or_else(|| format!("Constructor not found: {}", ctor_name.to_string()))?;
-            let ctor_val = ctor_info.to_constructor_val()
-                .ok_or_else(|| format!("Not a constructor: {}", ctor_name.to_string()))?;
-
-            // Apply constructor type to the occurrence args (strip params)
-            let applied_ty = ctor_val.constant_val.ty.apply_pi_binders(&occ.args)
-                .ok_or_else(|| format!("Constructor {} has fewer parameters than expected", ctor_name.to_string()))?;
-
-            // Replace occurrence with auxiliary name
-            let replaced_ty = applied_ty.replace_expr(&occ_expr, &Expr::mk_const(aux_name.clone(), vec![]));
-
-            // Name the auxiliary constructor: aux_name.ctor_name
-            let full_ctor_name = aux_name.extend(&ctor_name.to_string());
-            aux_ctors.push(Constructor {
-                name: full_ctor_name,
-                ty: replaced_ty,
-            });
-        }
-
-        // The auxiliary type lives in Type
-        let aux_ty = Expr::Sort(Level::mk_succ(Level::Zero));
-
-        Ok(InductiveType {
-            name: aux_name.clone(),
-            ty: aux_ty,
-            ctors: aux_ctors,
-        })
     }
 
     pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
@@ -199,18 +82,13 @@ impl Repl {
 
     pub fn run(&mut self) {
         println!("╔═══════════════════════════════════════════════════════════════════════╗");
-        println!("║          Lean 4 Kernel Symbolic Execution REPL v0.1                  ║");
+        println!("║          TTobs Kernel REPL v0.1 (Observational Type Theory)          ║");
         println!("║     Type :help for available commands. Type :quit to exit.          ║");
         println!("╚═══════════════════════════════════════════════════════════════════════╝");
         println!();
 
-        // Pre-populate with axioms only (Nat/Exists/Eq must be defined in .lean files)
-        println!("Pre-loaded: propext, choice");
-        println!();
-        self.load_axioms();
-
         loop {
-            print!("lean> ");
+            print!("ttobs> ");
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
@@ -261,15 +139,15 @@ impl Repl {
         }
 
         if input.starts_with(":theorem ") {
-            return self.handle_theorem(&input[9..]).map(|_| false);
-        }
-
-        if input.starts_with(":inductive ") {
-            return self.handle_inductive(&input[11..]).map(|_| false);
+            return self.handle_theorem_cmd(&input[9..]).map(|_| false);
         }
 
         if input.starts_with(":infer ") {
             return self.handle_infer(&input[7..]).map(|_| false);
+        }
+
+        if input.starts_with(":check ") {
+            return self.handle_check(&input[7..]).map(|_| false);
         }
 
         if input.starts_with(":reduce ") {
@@ -334,7 +212,7 @@ impl Repl {
                     is_unsafe: false,
                 });
                 self.env.add(decl).map_err(|e| e)?;
-                self.tc_state = TypeCheckerState::new(self.env.clone());
+                self.tc_state = self.tc_state.with_env(self.env.clone());
                 self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
                 if !self.quiet {
                     println!("  Added axiom: {}", name);
@@ -342,311 +220,23 @@ impl Repl {
                 Ok(())
             }
             ParsedDecl::Def { name, params, ret_ty, value } => {
-                self.process_def_or_theorem(name, params, ret_ty, value, false)
+                self.process_def(name, params, ret_ty, value)
             }
             ParsedDecl::Theorem { name, params, ret_ty, value } => {
-                self.process_def_or_theorem(name, params, Some(ret_ty), value, true)
+                self.process_theorem(name, params, ret_ty, value)
             }
-            ParsedDecl::Inductive { name, ty, ctors, num_params } => {
-                let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                let ind_name = Name::new(&name);
-                let mut ctor_exprs = Vec::new();
-                for (ctor_name, ctor_ty) in &ctors {
-                    let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                    ctor_exprs.push(Constructor {
-                        name: Name::new(ctor_name),
-                        ty: ctor_ty_expr,
-                    });
-                }
-
-                // Check for nested occurrences of the inductive type in constructor types
-                let mut nested = Vec::new();
-                for ctor in &ctor_exprs {
-                    find_nested_occurrences(&ctor.ty, &ind_name, &mut nested);
-                }
-
-                if !nested.is_empty() {
-                    // Generate auxiliary types for nested occurrences
-                    let mut aux_types = Vec::new();
-                    let mut replacements = Vec::new();
-                    let mut seen = std::collections::HashSet::new();
-
-                    for occ in nested {
-                        if !seen.insert(occ.clone()) {
-                            continue;
-                        }
-                        let aux_name = Name::new(&format!("{}_{}", name, occ.outer_name.to_string()));
-                        let aux_type = self.generate_aux_inductive(&occ, &aux_name)?;
-                        replacements.push((occ.to_expr(), Expr::mk_const(aux_name.clone(), vec![])));
-                        aux_types.push(aux_type);
-                    }
-
-                    // Replace nested occurrences in original constructor types
-                    let mut new_ctors = Vec::new();
-                    for ctor in ctor_exprs {
-                        let mut new_ty = ctor.ty;
-                        for (occ_expr, aux_expr) in &replacements {
-                            new_ty = new_ty.replace_expr(occ_expr, aux_expr);
-                        }
-                        new_ctors.push(Constructor {
-                            name: ctor.name,
-                            ty: new_ty,
-                        });
-                    }
-
-                    let ind = InductiveType {
-                        name: ind_name.clone(),
-                        ty: ty_expr,
-                        ctors: new_ctors,
-                    };
-
-                    let mut all_types = vec![ind];
-                    all_types.extend(aux_types);
-
-                    let decl = Declaration::Inductive {
-                        level_params: vec![],
-                        num_params: num_params as u64,
-                        types: all_types,
-                        is_unsafe: false,
-                    };
-
-                    self.env.add(decl).map_err(|e| e)?;
-                    self.tc_state = TypeCheckerState::new(self.env.clone());
-
-                    // Register constructors and recursors for all types
-                    for t in self.env.find(&ind_name).unwrap().to_inductive_val().unwrap().all.clone() {
-                        let info = self.env.find(&t).unwrap();
-                        if let Some(ind_val) = info.to_inductive_val() {
-                            for ctor_name in &ind_val.ctors {
-                                let cn = ctor_name.to_string();
-                                self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-                            }
-                        }
-                        self.env_bindings.insert(t.to_string(), Expr::mk_const(t.clone(), vec![]));
-                        let rec_name = format!("rec.{}", t.to_string());
-                        self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&t.to_string()), vec![]));
-                        if !self.quiet {
-                            println!("  Added inductive: {}", t.to_string());
-                        }
-                    }
-                    return Ok(());
-                }
-
-                // No nested occurrences: process as simple inductive
-                let ind = InductiveType {
-                    name: ind_name.clone(),
-                    ty: ty_expr,
-                    ctors: ctor_exprs,
-                };
-
-                let decl = Declaration::Inductive {
-                    level_params: vec![],
-                    num_params: num_params as u64,
-                    types: vec![ind],
-                    is_unsafe: false,
-                };
-
-                self.env.add(decl).map_err(|e| e)?;
-                self.tc_state = TypeCheckerState::new(self.env.clone());
-
-                // Register constructors and recursor in bindings
-                let info = self.env.find(&ind_name).unwrap();
-                if let Some(ind_val) = info.to_inductive_val() {
-                    for ctor_name in &ind_val.ctors {
-                        let cn = ctor_name.to_string();
-                        self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-                    }
-                }
-
-                self.env_bindings.insert(name.clone(), Expr::mk_const(ind_name.clone(), vec![]));
-                let rec_name = format!("rec.{}", name);
-                self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
-
-                if !self.quiet {
-
-                    println!("  Added inductive: {}", name);
-
-                }
-                Ok(())
-            }
-            ParsedDecl::MutualInductive { types } => {
-                let mut inductive_types = Vec::new();
-                for (name, ty, ctors, _num_params) in &types {
-                    let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                    let mut ctor_exprs = Vec::new();
-                    for (ctor_name, ctor_ty) in ctors {
-                        let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                        // Use fully-qualified constructor names: Even.zero, Odd.succ, etc.
-                        let full_ctor_name = Name::new(name).extend(ctor_name);
-                        ctor_exprs.push(Constructor {
-                            name: full_ctor_name,
-                            ty: ctor_ty_expr,
-                        });
-                    }
-                    inductive_types.push(InductiveType {
-                        name: Name::new(name),
-                        ty: ty_expr,
-                        ctors: ctor_exprs,
-                    });
-                }
-
-                // All types in the mutual block share the same num_params (use max for safety)
-                let max_params = types.iter().map(|(_, _, _, np)| *np).max().unwrap_or(0) as u64;
-
-                let decl = Declaration::Inductive {
-                    level_params: vec![],
-                    num_params: max_params,
-                    types: inductive_types,
-                    is_unsafe: false,
-                };
-
-                self.env.add(decl).map_err(|e| e)?;
-                self.tc_state = TypeCheckerState::new(self.env.clone());
-
-                // Register constructors and recursors for all types
-                for (name, _, _, _) in &types {
-                    let info = self.env.find(&Name::new(name)).unwrap();
-                    if let Some(ind_val) = info.to_inductive_val() {
-                        for ctor_name in &ind_val.ctors {
-                            let cn = ctor_name.to_string();
-                            self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-                        }
-                    }
-                    self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(name), vec![]));
-                    let rec_name = format!("rec.{}", name);
-                    self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(name), vec![]));
-                    if !self.quiet {
-                        println!("  Added inductive: {}", name);
-                    }
-                }
-                Ok(())
-            }
-            ParsedDecl::Structure { name, ty, fields } => {
-                let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                let struct_const = Expr::mk_const(Name::new(&name), vec![]);
-
-                // Build mk constructor type: field1 -> field2 -> ... -> Struct
-                let mut mk_ty = ParsedExpr::Const(name.clone());
-                for (_fname, fty) in fields.iter().rev() {
-                    mk_ty = ParsedExpr::Pi("_".to_string(), Box::new(fty.clone()), Box::new(mk_ty));
-                }
-                let mk_ty_expr = mk_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-
-                let ind = InductiveType {
-                    name: Name::new(&name),
-                    ty: ty_expr.clone(),
-                    ctors: vec![
-                        Constructor { name: Name::new("mk"), ty: mk_ty_expr },
-                    ],
-                };
-
-                let decl = Declaration::Inductive {
-                    level_params: vec![],
-                    num_params: 0,
-                    types: vec![ind],
-                    is_unsafe: false,
-                };
-
-                self.env.add(decl).map_err(|e| e)?;
-                self.tc_state = TypeCheckerState::new(self.env.clone());
-
-                // Register constructors and recursor in bindings
-                let info = self.env.find(&Name::new(&name)).unwrap();
-                if let Some(ind_val) = info.to_inductive_val() {
-                    for ctor_name in &ind_val.ctors {
-                        let cn = ctor_name.to_string();
-                        self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-                    }
-                }
-
-                self.env_bindings.insert(name.clone(), struct_const.clone());
-                let rec_name = Name::new("rec").extend(&name);
-                let rec_name_str = format!("rec.{}", name);
-                self.env_bindings.insert(rec_name_str.clone(), Expr::mk_const(rec_name.clone(), vec![]));
-
-                // Generate projection definitions
-                let num_fields = fields.len();
-                for (field_idx, (field_name, field_ty)) in fields.iter().enumerate() {
-                    let proj_name = format!("{}.{}", name, field_name);
-
-                    // Build recursor application for projection
-                    // rec.Struct (fun _ => FieldTy) (fun f1 => fun f2 => ... => fi) p
-                    let field_ty_expr = field_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-
-                    // motive: fun _ => FieldTy
-                    let motive = Expr::Lambda(
-                        Name::new("_"),
-                        BinderInfo::Default,
-                        Rc::new(struct_const.clone()),
-                        Rc::new(field_ty_expr.clone()),
-                    );
-
-                    // minor: fun f1 => fun f2 => ... => fi
-                    // Build lambdas from inside out, using correct field types
-                    let mut minor = Expr::mk_bvar((num_fields - 1 - field_idx) as u64);
-                    for i in (0..num_fields).rev() {
-                        let fty_expr = fields[i].1.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
-                        minor = Expr::Lambda(
-                            Name::new(&format!("f{}", i)),
-                            BinderInfo::Default,
-                            Rc::new(fty_expr),
-                            Rc::new(minor),
-                        );
-                    }
-
-                    // parameter p : Struct
-                    let p_var = Expr::mk_fvar(Name::new("p"));
-                    let body = Expr::mk_app(
-                        Expr::mk_app(
-                            Expr::mk_app(Expr::mk_const(rec_name.clone(), vec![]), motive),
-                            minor,
-                        ),
-                        p_var.clone(),
-                    );
-
-                    let proj_value = Expr::Lambda(
-                        Name::new("p"),
-                        BinderInfo::Default,
-                        Rc::new(struct_const.clone()),
-                        Rc::new(body),
-                    );
-
-                    let proj_ty = Expr::mk_arrow(struct_const.clone(), field_ty_expr);
-
-                    let proj_decl = Declaration::Definition(DefinitionVal {
-                        constant_val: ConstantVal {
-                            name: Name::new(&proj_name),
-                            level_params: vec![],
-                            ty: proj_ty,
-                        },
-                        value: proj_value,
-                        hints: ReducibilityHints::Regular(0),
-                        safety: DefinitionSafety::Safe,
-                    });
-
-                    self.env.add(proj_decl).map_err(|e| e)?;
-                    self.env_bindings.insert(proj_name.clone(), Expr::mk_const(Name::new(&proj_name), vec![]));
-                    if !self.quiet {
-                        println!("  Added projection: {}", proj_name);
-                    }
-                }
-
-                self.tc_state = TypeCheckerState::new(self.env.clone());
-                if !self.quiet {
-                    println!("  Added structure: {}", name);
-                }
-                Ok(())
+            ParsedDecl::Inductive { name, ctors } => {
+                self.process_inductive(name, ctors)
             }
         }
     }
 
-    fn process_def_or_theorem(
+    fn process_def(
         &mut self,
         name: String,
         params: Vec<(String, super::repl_parser::ParsedExpr)>,
         ret_ty: Option<super::repl_parser::ParsedExpr>,
         value: super::repl_parser::ParsedExpr,
-        is_theorem: bool,
     ) -> Result<(), String> {
         // Convert parameter types, accumulating bound_vars so later params can reference earlier ones
         let mut param_exprs: Vec<(String, Expr)> = Vec::new();
@@ -657,36 +247,7 @@ impl Repl {
             bound_vars.push(pname.clone());
         }
 
-        // Handle tactic block
-        let value_expr = match &value {
-            ParsedExpr::TacticBlock(tactics) => {
-                if !is_theorem {
-                    return Err("Tactic blocks are only allowed in theorems".to_string());
-                }
-                let target = ret_ty.as_ref().ok_or("Theorem with tactic block must have an explicit return type")?;
-                let mut target_expr = target.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
-                // Wrap target with parameter types as Pi binders
-                for (pname, pty) in param_exprs.iter().rev() {
-                    target_expr = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(target_expr));
-                }
-
-                let env = &self.env;
-                let env_bindings = &self.env_bindings;
-                let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
-
-                for tactic_cmd in tactics {
-                    execute_tactic(env, env_bindings, &mut engine, tactic_cmd)?;
-                }
-
-                if engine.num_goals() > 0 {
-                    return Err(format!("Unsolved goals remaining: {}", engine.num_goals()));
-                }
-
-                let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
-                engine.build_proof(&root_mvar)
-            }
-            _ => value.to_expr(&self.env_bindings, &self.env, &mut bound_vars),
-        };
+        let value_expr = value.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
 
         // Embed params into value as lambdas
         let mut final_value = value_expr;
@@ -712,44 +273,284 @@ impl Repl {
             tc.infer(&final_value).map_err(|e| format!("Cannot infer type: {}", e))?
         };
 
-        if is_theorem {
-            let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
-            tc.check(&final_value, &final_ty)
-                .map_err(|e| format!("Proof does not match theorem type: {}", e))?;
-
-            let decl = Declaration::Theorem(TheoremVal {
-                constant_val: ConstantVal {
-                    name: Name::new(&name),
-                    level_params: vec![],
-                    ty: final_ty,
-                },
-                value: final_value,
-            });
-            self.env.add(decl).map_err(|e| e)?;
-            self.tc_state = TypeCheckerState::new(self.env.clone());
-            self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-            if !self.quiet {
-                println!("  Added theorem: {}", name);
-            }
-        } else {
-            let decl = Declaration::Definition(DefinitionVal {
-                constant_val: ConstantVal {
-                    name: Name::new(&name),
-                    level_params: vec![],
-                    ty: final_ty,
-                },
-                value: final_value,
-                hints: ReducibilityHints::Regular(0),
-                safety: DefinitionSafety::Safe,
-            });
-            self.env.add(decl).map_err(|e| e)?;
-            self.tc_state = TypeCheckerState::new(self.env.clone());
-            self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-            if !self.quiet {
-                println!("  Added definition: {}", name);
-            }
+        let decl = Declaration::Definition(DefinitionVal {
+            constant_val: ConstantVal {
+                name: Name::new(&name),
+                level_params: vec![],
+                ty: final_ty,
+            },
+            value: final_value,
+            hints: ReducibilityHints::Regular(0),
+            safety: DefinitionSafety::Safe,
+        });
+        self.env.add(decl).map_err(|e| e)?;
+        self.tc_state = self.tc_state.with_env(self.env.clone());
+        self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
+        if !self.quiet {
+            println!("  Added definition: {}", name);
         }
         Ok(())
+    }
+
+    fn process_theorem(
+        &mut self,
+        name: String,
+        params: Vec<(String, super::repl_parser::ParsedExpr)>,
+        ret_ty: super::repl_parser::ParsedExpr,
+        value: super::repl_parser::ParsedExpr,
+    ) -> Result<(), String> {
+        let mut param_exprs: Vec<(String, Expr)> = Vec::new();
+        let mut bound_vars: Vec<String> = Vec::new();
+        for (pname, pty) in &params {
+            let ty_expr = pty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+            param_exprs.push((pname.clone(), ty_expr));
+            bound_vars.push(pname.clone());
+        }
+
+        let value_expr = value.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+        let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+
+        // Embed params into value as lambdas
+        let mut final_value = value_expr;
+        for (pname, pty) in param_exprs.iter().rev() {
+            final_value = Expr::Lambda(
+                Name::new(pname),
+                BinderInfo::Default,
+                Rc::new(pty.clone()),
+                Rc::new(final_value),
+            );
+        }
+
+        // Build final type as Pi binders
+        let mut final_ty = ret_ty_expr;
+        for (pname, pty) in param_exprs.iter().rev() {
+            final_ty = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(final_ty));
+        }
+
+        // Check that the theorem type lives in Omega (i.e., is a proposition)
+        let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+        let ty_of_ty = tc.infer(&final_ty).map_err(|e| format!("Cannot infer type of theorem type: {}", e))?;
+        let ty_of_ty_whnf = tc.whnf(&ty_of_ty);
+        if !matches!(ty_of_ty_whnf, Expr::Omega(_)) {
+            return Err(format!(
+                "Theorem type must be a proposition (Omega), got {}",
+                format_expr(&ty_of_ty_whnf)
+            ));
+        }
+
+        // Check that the proof matches the theorem type
+        tc.check(&final_value, &final_ty)
+            .map_err(|e| format!("Proof does not match theorem type: {}", e))?;
+
+        let decl = Declaration::Definition(DefinitionVal {
+            constant_val: ConstantVal {
+                name: Name::new(&name),
+                level_params: vec![],
+                ty: final_ty,
+            },
+            value: final_value,
+            hints: ReducibilityHints::Regular(0),
+            safety: DefinitionSafety::Safe,
+        });
+        self.env.add(decl).map_err(|e| e)?;
+        self.tc_state = self.tc_state.with_env(self.env.clone());
+        self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
+        if !self.quiet {
+            println!("  Added theorem: {}", name);
+        }
+        Ok(())
+    }
+
+    fn process_inductive(
+        &mut self,
+        name: String,
+        ctors: Vec<(String, super::repl_parser::ParsedExpr)>,
+    ) -> Result<(), String> {
+        let ind_name = Name::new(&name);
+        let ind_const = Expr::mk_const(ind_name.clone(), vec![]);
+
+        // 1. Type axiom: Name : U
+        self.env
+            .add(Declaration::Axiom(AxiomVal {
+                constant_val: ConstantVal {
+                    name: ind_name.clone(),
+                    level_params: vec![],
+                    ty: Expr::U(Level::Zero),
+                },
+                is_unsafe: false,
+            }))
+            .map_err(|e| e)?;
+        self.env_bindings.insert(name.clone(), ind_const.clone());
+
+        // 2. Constructor axioms
+        let mut ctor_infos: Vec<(Name, Expr, Vec<Expr>)> = Vec::new();
+        for (ctor_name_str, ctor_ty_parsed) in &ctors {
+            let ctor_ty = ctor_ty_parsed.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+            let ctor_name = ind_name.extend(ctor_name_str);
+
+            // Extract argument types from Pi chain
+            let mut args = Vec::new();
+            let mut current = &ctor_ty;
+            while let Expr::Pi(_, _, domain, body) = current {
+                args.push((**domain).clone());
+                current = body;
+            }
+            // Verify return type is the inductive type
+            match current {
+                Expr::Const(n, _) if *n == ind_name => {}
+                _ => {
+                    return Err(format!(
+                        "Constructor {} return type must be {}",
+                        ctor_name_str, name
+                    ));
+                }
+            }
+
+            self.env
+                .add(Declaration::Axiom(AxiomVal {
+                    constant_val: ConstantVal {
+                        name: ctor_name.clone(),
+                        level_params: vec![],
+                        ty: ctor_ty.clone(),
+                    },
+                    is_unsafe: false,
+                }))
+                .map_err(|e| e)?;
+            self.env_bindings
+                .insert(ctor_name_str.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+            ctor_infos.push((ctor_name, ctor_ty, args));
+        }
+        self.tc_state = self.tc_state.with_env(self.env.clone());
+
+        // 3. Generate recursor
+        let rec_name = Name::new("rec").extend(&name);
+        let c_ty = Expr::mk_arrow(ind_const.clone(), Expr::U(Level::Zero));
+        let c_depth = ctor_infos.len() as u64;
+
+        // Build recursor body: Π(n:Name). C n
+        let mut rec_body: Expr = Expr::Pi(
+            Name::new("n"),
+            BinderInfo::Default,
+            Rc::new(ind_const.clone()),
+            Rc::new(Expr::mk_app(Expr::BVar(c_depth + 1), Expr::BVar(0))),
+        );
+
+        // Prepend minor premises from last to first
+        let mut ctor_rec_infos: Vec<Vec<usize>> = Vec::new();
+        for (idx, (ctor_name, _ctor_ty, args)) in ctor_infos.iter().enumerate().rev() {
+            let (minor, rec_args) = self.build_minor_premise(ctor_name, args, &ind_name, c_depth)?;
+            ctor_rec_infos.push(rec_args);
+            rec_body = Expr::Pi(
+                Name::new(&format!("m{}", idx)),
+                BinderInfo::Default,
+                Rc::new(minor),
+                Rc::new(rec_body),
+            );
+        }
+        ctor_rec_infos.reverse();
+
+        let rec_ty = Expr::Pi(
+            Name::new("C"),
+            BinderInfo::Default,
+            Rc::new(c_ty),
+            Rc::new(rec_body),
+        );
+
+        // Recursor as axiom (reduction rules are hard-coded in type checker)
+        self.env
+            .add(Declaration::Axiom(AxiomVal {
+                constant_val: ConstantVal {
+                    name: rec_name.clone(),
+                    level_params: vec![],
+                    ty: rec_ty,
+                },
+                is_unsafe: false,
+            }))
+            .map_err(|e| e)?;
+        self.env_bindings.insert(
+            format!("rec.{}", name),
+            Expr::mk_const(rec_name.clone(), vec![]),
+        );
+
+        // Register recursor info for iota reduction
+        let constructors: Vec<ConstructorInfo> = ctor_infos
+            .iter()
+            .zip(ctor_rec_infos.iter())
+            .map(|((ctor_name, _ctor_ty, args), rec_args)| ConstructorInfo {
+                name: ctor_name.clone(),
+                num_args: args.len(),
+                recursive_args: rec_args.clone(),
+            })
+            .collect();
+        self.tc_state.register_recursor(
+            rec_name.clone(),
+            RecursorInfo {
+                inductive_name: ind_name.clone(),
+                constructors,
+            },
+        );
+
+        if !self.quiet {
+            println!(
+                "  Added inductive: {} ({} constructors, recursor: {})",
+                name,
+                ctors.len(),
+                rec_name.to_string()
+            );
+        }
+        Ok(())
+    }
+
+    /// Build a minor premise for a constructor.
+    /// `args` are the constructor argument types.
+    /// `c_depth` is the de Bruijn index of C in the final recursor type.
+    fn build_minor_premise(
+        &self,
+        ctor_name: &Name,
+        args: &[Expr],
+        ind_name: &Name,
+        c_depth: u64,
+    ) -> Result<(Expr, Vec<usize>), String> {
+        // Build ctor application: ctor x0 x1 ...
+        let mut ctor_app = Expr::mk_const(ctor_name.clone(), vec![]);
+        for i in 0..args.len() {
+            ctor_app = Expr::mk_app(ctor_app, Expr::BVar((args.len() - 1 - i) as u64));
+        }
+
+        // Result: C (ctor_app)
+        let mut result = Expr::mk_app(Expr::BVar(c_depth + args.len() as u64), ctor_app);
+        let mut recursive_args = Vec::new();
+
+        // Add argument binders from inside out
+        for (i, arg) in args.iter().enumerate().rev() {
+            let arg_idx = (args.len() - 1 - i) as u64;
+
+            // If arg type references the inductive type, add a recursive premise
+            if arg.contains_const(ind_name) {
+                recursive_args.push(i);
+                let rec_ty = Expr::mk_app(
+                    Expr::BVar(c_depth + args.len() as u64 + 1),
+                    Expr::BVar(arg_idx),
+                );
+                result = Expr::Pi(
+                    Name::new(&format!("ih{}", i)),
+                    BinderInfo::Default,
+                    Rc::new(rec_ty),
+                    Rc::new(result),
+                );
+            }
+
+            result = Expr::Pi(
+                Name::new(&format!("x{}", i)),
+                BinderInfo::Default,
+                Rc::new(arg.clone()),
+                Rc::new(result),
+            );
+        }
+
+        // Reverse to get args in left-to-right order
+        recursive_args.reverse();
+        Ok((result, recursive_args))
     }
 
     fn handle_axiom(&mut self, rest: &str) -> Result<(), String> {
@@ -772,7 +573,7 @@ impl Repl {
         });
 
         self.env.add(decl).map_err(|e| e)?;
-        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.tc_state = self.tc_state.with_env(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
         if !self.quiet {
             println!("  Added axiom: {}", name);
@@ -826,7 +627,7 @@ impl Repl {
         });
 
         self.env.add(decl).map_err(|e| e)?;
-        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.tc_state = self.tc_state.with_env(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
         if !self.quiet {
             println!("  Added definition: {}", name);
@@ -834,7 +635,26 @@ impl Repl {
         Ok(())
     }
 
-    fn handle_theorem(&mut self, rest: &str) -> Result<(), String> {
+    fn handle_check(&mut self, rest: &str) -> Result<(), String> {
+        let parts: Vec<&str> = rest.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err("Usage: :check <expr> : <type>".to_string());
+        }
+        let expr_str = parts[0].trim();
+        let ty_str = parts[1].trim();
+
+        let expr = self.parse_and_convert(expr_str)?;
+        let ty = self.parse_and_convert(ty_str)?;
+
+        let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+        match tc.check(&expr, &ty) {
+            Ok(_) => println!("  ✓ Type checks: {}", format_expr(&ty)),
+            Err(e) => println!("  ✗ Type error: {}", e),
+        }
+        Ok(())
+    }
+
+    fn handle_theorem_cmd(&mut self, rest: &str) -> Result<(), String> {
         let name_end = rest.find(|c: char| c.is_whitespace() || c == ':' || c == '=')
             .unwrap_or(rest.len());
         let name = rest[..name_end].trim().to_string();
@@ -855,86 +675,35 @@ impl Repl {
         let proof = self.parse_and_convert(proof_str)?;
 
         let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+
+        // Check that the theorem type lives in Omega
+        let ty_of_ty = tc.infer(&ty).map_err(|e| format!("Cannot infer type of theorem type: {}", e))?;
+        let ty_of_ty_whnf = tc.whnf(&ty_of_ty);
+        if !matches!(ty_of_ty_whnf, Expr::Omega(_)) {
+            return Err(format!(
+                "Theorem type must be a proposition (Omega), got {}",
+                format_expr(&ty_of_ty_whnf)
+            ));
+        }
+
         tc.check(&proof, &ty).map_err(|e| format!("Proof does not match theorem type: {}", e))?;
 
-        let decl = Declaration::Theorem(TheoremVal {
+        let decl = Declaration::Definition(DefinitionVal {
             constant_val: ConstantVal {
                 name: Name::new(&name),
                 level_params: vec![],
-                ty,
+                ty: ty,
             },
             value: proof,
+            hints: ReducibilityHints::Regular(0),
+            safety: DefinitionSafety::Safe,
         });
 
         self.env.add(decl).map_err(|e| e)?;
-        self.tc_state = TypeCheckerState::new(self.env.clone());
+        self.tc_state = self.tc_state.with_env(self.env.clone());
         self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
         if !self.quiet {
             println!("  Added theorem: {}", name);
-        }
-        Ok(())
-    }
-
-    fn handle_inductive(&mut self, rest: &str) -> Result<(), String> {
-        let mut parts = rest.split('|');
-        let name = parts.next().unwrap_or("").trim().to_string();
-        if name.is_empty() {
-            return Err("Usage: :inductive <name> | <ctor1> : <type1> | ...".to_string());
-        }
-
-        let mut ctors = Vec::new();
-        for part in parts {
-            let part = part.trim();
-            if part.is_empty() {
-                continue;
-            }
-            let ctor_parts: Vec<&str> = part.splitn(2, ':').collect();
-            if ctor_parts.len() != 2 {
-                return Err(format!("Invalid constructor syntax: {}", part));
-            }
-            let ctor_name = ctor_parts[0].trim().to_string();
-            let ctor_ty_str = ctor_parts[1].trim();
-            let ctor_ty = self.parse_and_convert(ctor_ty_str)?;
-            ctors.push(Constructor {
-                name: Name::new(&ctor_name),
-                ty: ctor_ty,
-            });
-        }
-
-        let ind_ty = Expr::mk_type();
-        let ind = InductiveType {
-            name: Name::new(&name),
-            ty: ind_ty,
-            ctors,
-        };
-
-        let decl = Declaration::Inductive {
-            level_params: vec![],
-            num_params: 0,
-            types: vec![ind],
-            is_unsafe: false,
-        };
-
-        self.env.add(decl).map_err(|e| e)?;
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-
-        // Register constructors and recursor in bindings
-        let info = self.env.find(&Name::new(&name)).unwrap();
-        if let Some(ind_val) = info.to_inductive_val() {
-            for ctor_name in &ind_val.ctors {
-                let cn = ctor_name.to_string();
-                self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-            }
-        }
-
-        self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(&name), vec![]));
-        let rec_name = format!("rec.{}", name);
-        self.env_bindings.insert(rec_name.clone(), Expr::mk_const(Name::new("rec").extend(&name), vec![]));
-
-        if !self.quiet {
-
-            println!("  Added inductive: {}", name);
-
         }
         Ok(())
     }
@@ -987,13 +756,13 @@ impl Repl {
     fn print_help(&self) {
         println!("Commands:");
         println!("  :env                          Show current environment");
-        println!("  :load <file.lean>             Load declarations from a file");
+        println!("  :load <file.ott>              Load declarations from a file");
         println!("  :axiom <name> : <type>        Add an axiom");
         println!("  :def <name> := <value>        Add a definition");
         println!("  :def <name> : <type> := <val> Add a definition with type");
-        println!("  :theorem <name> : <type> := <proof>  Add a theorem");
-        println!("  :inductive <name> | <c>:<t>|..Add an inductive type");
+        println!("  :theorem <name> : <type> := <proof>  Add a theorem (type must be in Omega)");
         println!("  :infer <expr>                 Infer the type");
+        println!("  :check <expr> : <type>        Check expression against type");
         println!("  :reduce <expr>                Reduce to WHNF");
         println!("  :nf <expr>                    Reduce to full NF");
         println!("  :defeq <e1> = <e2>            Check definitional equality");
@@ -1001,299 +770,27 @@ impl Repl {
         println!("  :quit                         Exit");
         println!();
         println!("Expression syntax:");
-        println!("  Constants: Nat, zero, succ, Bool, true, ...");
+        println!("  Constants: Nat, zero, succ, f, x, ...");
         println!("  Application: f a b (left-associative)");
         println!("  Lambda: \\x : Nat . x  or  fun x => x");
         println!("  Pi: Nat -> Nat  or  (x : Nat) -> Nat");
-        println!("  Let: let x := zero in x");
-        println!("  Have: have h : P := proof in e");
-        println!("  Match: match e : T with | ctor => e1 | ctor x => e2");
-        println!("  Sort: Type, Prop");
+        println!("  Let: let x : Nat := zero in x");
+        println!("  Have: have h : Nat := zero in h");
+        println!("  Universe: U, U1, U2, ... (proof-relevant)");
+        println!("  Universe: Omega, Omega1, ... (proof-irrelevant)");
+        println!("  Observational equality: eq(A, t, u)");
+        println!("  Cast: cast(A, B, e, t)");
         println!("  Parens: (e)");
-        println!("  Numbers: 0, 1, 2, ...");
         println!();
         println!("File syntax (:load)");
-        println!("  inductive Name where");
-        println!("  | ctor : Type");
         println!("  def name (params) : type := value");
         println!("  theorem name (params) : type := proof");
+        println!("  axiom name : type");
     }
 
-    fn load_nat(&mut self) {
-        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
-        let ind = InductiveType {
-            name: Name::new("Nat"),
-            ty: Expr::mk_type(),
-            ctors: vec![
-                Constructor { name: Name::new("zero"), ty: nat.clone() },
-                Constructor { name: Name::new("succ"), ty: Expr::mk_arrow(nat.clone(), nat.clone()) },
-            ],
-        };
-        let _ = self.env.add(Declaration::Inductive {
-            level_params: vec![],
-            num_params: 0,
-            types: vec![ind],
-            is_unsafe: false,
-        });
-
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-        self.env_bindings.insert("Nat".to_string(), Expr::mk_const(Name::new("Nat"), vec![]));
-        self.env_bindings.insert("zero".to_string(), Expr::mk_const(Name::new("zero"), vec![]));
-        self.env_bindings.insert("succ".to_string(), Expr::mk_const(Name::new("succ"), vec![]));
-        self.env_bindings.insert("rec.Nat".to_string(), Expr::mk_const(Name::new("rec").extend("Nat"), vec![]));
-    }
-
-    fn load_exists(&mut self) {
-        let prop = Expr::mk_sort(Level::Zero);
-        let ty = Expr::mk_type();
-        // Exists : Π (A : Type), Π (P : A → Prop), Prop
-        let exists_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
-            Expr::mk_pi(Name::new("P"),
-                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0), prop.clone()),
-                prop.clone()));
-
-        // intro : Π (A : Type), Π (P : A → Prop), Π (w : A), Π (h : P w), Exists A P
-        let h_ty = Expr::mk_app(Expr::mk_bvar(1), Expr::mk_bvar(0));
-        let ret_ty = Expr::mk_app(
-            Expr::mk_app(
-                Expr::mk_const(Name::new("Exists"), vec![]),
-                Expr::mk_bvar(3),
-            ),
-            Expr::mk_bvar(2),
-        );
-        let intro_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
-            Expr::mk_pi(Name::new("P"),
-                Expr::mk_pi(Name::new("_"), Expr::mk_bvar(0), prop.clone()),
-                Expr::mk_pi(Name::new("w"), Expr::mk_bvar(1),
-                    Expr::mk_pi(Name::new("h"), h_ty, ret_ty))));
-
-        let ind = InductiveType {
-            name: Name::new("Exists"),
-            ty: exists_ty,
-            ctors: vec![
-                Constructor { name: Name::new("intro"), ty: intro_ty },
-            ],
-        };
-        let _ = self.env.add(Declaration::Inductive {
-            level_params: vec![],
-            num_params: 0,
-            types: vec![ind],
-            is_unsafe: false,
-        });
-
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-        self.env_bindings.insert("Exists".to_string(), Expr::mk_const(Name::new("Exists"), vec![]));
-        self.env_bindings.insert("intro".to_string(), Expr::mk_const(Name::new("intro"), vec![]));
-        self.env_bindings.insert("rec.Exists".to_string(), Expr::mk_const(Name::new("rec").extend("Exists"), vec![]));
-    }
-
-    fn load_eq(&mut self) {
-        let prop = Expr::mk_sort(Level::Zero);
-        let ty = Expr::mk_type();
-        // Eq : Π (A : Type), Π (a : A), Π (b : A), Prop
-        let eq_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
-            Expr::mk_pi(Name::new("a"), Expr::mk_bvar(0),
-                Expr::mk_pi(Name::new("b"), Expr::mk_bvar(1),
-                    prop.clone())));
-        // refl : Π (A : Type), Π (a : A), Eq A a a
-        let refl_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
-            Expr::mk_pi(Name::new("a"), Expr::mk_bvar(0),
-                Expr::mk_app(Expr::mk_app(Expr::mk_app(
-                    Expr::mk_const(Name::new("Eq"), vec![]),
-                    Expr::mk_bvar(1)),
-                    Expr::mk_bvar(0)),
-                    Expr::mk_bvar(0))));
-
-        let ind = InductiveType {
-            name: Name::new("Eq"),
-            ty: eq_ty,
-            ctors: vec![
-                Constructor { name: Name::new("refl"), ty: refl_ty },
-            ],
-        };
-        let _ = self.env.add(Declaration::Inductive {
-            level_params: vec![],
-            num_params: 0,
-            types: vec![ind],
-            is_unsafe: false,
-        });
-
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-        self.env_bindings.insert("Eq".to_string(), Expr::mk_const(Name::new("Eq"), vec![]));
-        self.env_bindings.insert("refl".to_string(), Expr::mk_const(Name::new("refl"), vec![]));
-        self.env_bindings.insert("rec.Eq".to_string(), Expr::mk_const(Name::new("rec").extend("Eq"), vec![]));
-    }
-
-    fn load_axioms(&mut self) {
-        let prop = Expr::mk_sort(Level::Zero);
-        let ty = Expr::mk_type();
-
-        // propext : Π (P : Prop), Π (Q : Prop), Π (_ : P → Q), Π (_ : Q → P), Eq Prop P Q
-        let eq_const = Expr::mk_const(Name::new("Eq"), vec![]);
-        let eq_app = |a, b, c| Expr::mk_app(Expr::mk_app(Expr::mk_app(eq_const.clone(), a), b), c);
-        let propext_ty = Expr::mk_pi(Name::new("P"), prop.clone(),
-            Expr::mk_pi(Name::new("Q"), prop.clone(),
-                Expr::mk_pi(Name::new("_"), Expr::mk_arrow(Expr::mk_bvar(1), Expr::mk_bvar(1)),
-                    Expr::mk_pi(Name::new("_"), Expr::mk_arrow(Expr::mk_bvar(2), Expr::mk_bvar(2)),
-                        eq_app(Expr::mk_bvar(3), Expr::mk_bvar(2), Expr::mk_bvar(1))))));
-
-        let propext_decl = Declaration::Axiom(AxiomVal {
-            constant_val: ConstantVal {
-                name: Name::new("propext"),
-                level_params: vec![],
-                ty: propext_ty,
-            },
-            is_unsafe: false,
-        });
-        let _ = self.env.add(propext_decl);
-
-        // choice : Π (A : Type), Π (P : A → Prop), Π (_ : Exists A P), A
-        let exists_app = Expr::mk_app(Expr::mk_app(Expr::mk_const(Name::new("Exists"), vec![]), Expr::mk_bvar(1)), Expr::mk_bvar(0));
-        let choice_ty = Expr::mk_pi(Name::new("A"), ty.clone(),
-            Expr::mk_pi(Name::new("P"), Expr::mk_arrow(Expr::mk_bvar(0), prop.clone()),
-                Expr::mk_pi(Name::new("_"), exists_app, Expr::mk_bvar(2))));
-
-        let choice_decl = Declaration::Axiom(AxiomVal {
-            constant_val: ConstantVal {
-                name: Name::new("choice"),
-                level_params: vec![],
-                ty: choice_ty,
-            },
-            is_unsafe: false,
-        });
-        let _ = self.env.add(choice_decl);
-
-        // sorry_prop : Π (P : Prop), P
-        let sorry_prop_ty = Expr::mk_pi(Name::new("P"), prop.clone(), Expr::mk_bvar(0));
-        let sorry_prop_decl = Declaration::Axiom(AxiomVal {
-            constant_val: ConstantVal {
-                name: Name::new("sorry_prop"),
-                level_params: vec![],
-                ty: sorry_prop_ty,
-            },
-            is_unsafe: false,
-        });
-        let _ = self.env.add(sorry_prop_decl);
-
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-        self.env_bindings.insert("propext".to_string(), Expr::mk_const(Name::new("propext"), vec![]));
-        self.env_bindings.insert("choice".to_string(), Expr::mk_const(Name::new("choice"), vec![]));
-        self.env_bindings.insert("sorry_prop".to_string(), Expr::mk_const(Name::new("sorry_prop"), vec![]));
-    }
-
-    fn load_quot(&mut self) {
-        let _ = self.env.add(Declaration::Quot);
-        self.tc_state = TypeCheckerState::new(self.env.clone());
-        self.env_bindings.insert("Quot".to_string(), Expr::mk_const(Name::new("Quot"), vec![]));
-        self.env_bindings.insert("Quot.mk".to_string(), Expr::mk_const(Name::new("Quot").extend("mk"), vec![]));
-        self.env_bindings.insert("Quot.lift".to_string(), Expr::mk_const(Name::new("Quot").extend("lift"), vec![]));
-        self.env_bindings.insert("Quot.ind".to_string(), Expr::mk_const(Name::new("Quot").extend("ind"), vec![]));
-        self.env_bindings.insert("Quot.sound".to_string(), Expr::mk_const(Name::new("Quot").extend("sound"), vec![]));
-    }
-
-    /// Extract internal state for external tools (e.g., TUI).
+    /// Extract internal state for external tools.
     pub fn into_state(self) -> (Environment, TypeCheckerState, HashMap<String, Expr>) {
         (self.env, self.tc_state, self.env_bindings)
-    }
-}
-
-/// Parse an expression for tactic use (standalone to avoid borrow conflicts)
-fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, input: &str) -> Result<Expr, String> {
-    let mut parser = ReplParser::new(input);
-    let parsed = parser.parse_expr().map_err(|e| format!("parse error: {}", e))?;
-    Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
-}
-
-/// Execute a single tactic command (standalone to avoid borrow conflicts)
-fn execute_tactic(
-    env: &Environment,
-    env_bindings: &HashMap<String, Expr>,
-    engine: &mut TacticEngine,
-    cmd: &str,
-) -> Result<(), String> {
-    let cmd = cmd.trim();
-    if cmd.is_empty() {
-        return Ok(());
-    }
-
-    let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
-    let tactic_name = parts[0];
-    let rest = parts.get(1).map(|s| s.trim()).unwrap_or("");
-
-    match tactic_name {
-        "intro" | "intros" => {
-            if rest.is_empty() {
-                engine.tactic_intro("_x")?;
-            } else {
-                for name in rest.split_whitespace() {
-                    engine.tactic_intro(name)?;
-                }
-            }
-            Ok(())
-        }
-        "exact" => {
-            if rest.is_empty() {
-                return Err("exact requires an expression".to_string());
-            }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
-            engine.tactic_exact(&expr)
-        }
-        "apply" => {
-            if rest.is_empty() {
-                return Err("apply requires an expression".to_string());
-            }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
-            engine.tactic_apply(&expr)
-        }
-        "refl" | "reflexivity" => {
-            engine.tactic_refl()
-        }
-        "assumption" => {
-            engine.tactic_assumption()
-        }
-        "rewrite" | "rw" => {
-            if rest.is_empty() {
-                return Err("rewrite requires an equality hypothesis".to_string());
-            }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
-            engine.tactic_rewrite(&expr)
-        }
-        "induction" => {
-            if rest.is_empty() {
-                return Err("induction requires a variable name".to_string());
-            }
-            let var_name = rest.trim();
-            let var_expr = Expr::mk_fvar(Name::new(var_name));
-            engine.tactic_induction(&var_expr)
-        }
-        "have" => {
-            if rest.is_empty() {
-                return Err("have requires name, type and proof".to_string());
-            }
-            let have_rest = rest.trim();
-            let name_end = have_rest.find(|c: char| c == ':' || c == ' ')
-                .unwrap_or(have_rest.len());
-            let name = have_rest[..name_end].trim().to_string();
-            let after_name = have_rest[name_end..].trim_start();
-
-            if !after_name.starts_with(':') {
-                return Err("have syntax: have <name> : <type> := <proof>".to_string());
-            }
-            let after_colon = after_name[1..].trim_start();
-
-            let assign_pos = after_colon.find(":=");
-            if assign_pos.is_none() {
-                return Err("have syntax: have <name> : <type> := <proof>".to_string());
-            }
-            let assign_pos = assign_pos.unwrap();
-            let ty_str = after_colon[..assign_pos].trim();
-            let proof_str = after_colon[assign_pos + 2..].trim();
-
-            let ty = parse_tactic_expr(env_bindings, env, ty_str)?;
-            let proof = parse_tactic_expr(env_bindings, env, proof_str)?;
-            engine.tactic_have(&name, &ty, &proof)
-        }
-        _ => Err(format!("Unknown tactic: {}", tactic_name)),
     }
 }
 
@@ -1301,6 +798,7 @@ fn execute_tactic(
 pub fn format_expr(e: &Expr) -> String {
     match e {
         Expr::BVar(n) => format!("x{}", n),
+        Expr::FVar(name) => name.to_string(),
         Expr::Const(name, _) => name.to_string(),
         Expr::App(_, _) => {
             let (head, args) = e.get_app_args();
@@ -1321,11 +819,33 @@ pub fn format_expr(e: &Expr) -> String {
         Expr::Pi(_, _, ty, body) => {
             format!("Π(_ : {}). {}", format_expr(ty), format_expr(body))
         }
-        Expr::Let(_, ty, val, body, _) => {
-            format!("let _ : {} := {} in {}", format_expr(ty), format_expr(val), format_expr(body))
+        Expr::U(l) => {
+            if let Some(n) = l.to_explicit() {
+                if n == 0 {
+                    "U".to_string()
+                } else {
+                    format!("U{}", n)
+                }
+            } else {
+                format!("U({:?})", l)
+            }
         }
-        Expr::Sort(l) => format!("Sort({:?})", l),
-        Expr::Lit(Literal::Nat(n)) => n.to_string(),
-        _ => format!("{:?}", e),
+        Expr::Omega(l) => {
+            if let Some(n) = l.to_explicit() {
+                if n == 0 {
+                    "Omega".to_string()
+                } else {
+                    format!("Omega{}", n)
+                }
+            } else {
+                format!("Omega({:?})", l)
+            }
+        }
+        Expr::Eq(a, t, u) => {
+            format!("eq({}, {}, {})", format_expr(a), format_expr(t), format_expr(u))
+        }
+        Expr::Cast(a, b, proof, term) => {
+            format!("cast({}, {}, {}, {})", format_expr(a), format_expr(b), format_expr(proof), format_expr(term))
+        }
     }
 }

@@ -1,0 +1,30 @@
+-- 自然数类型和基本运算
+
+inductive Nat where
+  | zero : Nat
+  | succ : Nat -> Nat
+
+-- 自然数加法
+def nat_add (m : Nat) (n : Nat) : Nat :=
+  rec.Nat (fun _ => Nat) n (fun m' : Nat => fun ih : Nat => succ ih) m
+
+-- 自然数减法（截断到 0）
+def nat_sub (m : Nat) (n : Nat) : Nat :=
+  rec.Nat (fun _ => Nat -> Nat)
+    (fun n => zero)
+    (fun m' : Nat => fun ih : Nat -> Nat => fun n : Nat =>
+      rec.Nat (fun _ => Nat)
+        (succ m')
+        (fun n' : Nat => fun _ : Nat => ih n')
+        n)
+    m
+    n
+
+-- 自然数乘法
+def nat_mul (m : Nat) (n : Nat) : Nat :=
+  rec.Nat (fun _ => Nat) zero (fun m' : Nat => fun ih : Nat => nat_add ih n) m
+
+-- 别名
+def add := nat_add
+def sub := nat_sub
+def mul := nat_mul

@@ -1,0 +1,8 @@
+-- 实数：通过柯西序列的商类型构造
+-- 依赖: Order.ott, True.ott, Int.ott, IntOrder.ott, Frac.ott, Cauchy.ott
+
+def Real := Quot (Nat -> Frac) cauchy_equiv
+
+def real_mk (a : Nat -> Frac) : Real := Quot.mk (Nat -> Frac) cauchy_equiv a
+
+def real_zero : Real := real_mk (fun n : Nat => nat_to_frac 0)

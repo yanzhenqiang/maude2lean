@@ -1,0 +1,15 @@
+-- Exists 类型与选择公理
+-- 依赖: True.ott
+
+axiom Exists : forall (A : U), (A -> Omega) -> Omega
+axiom Exists.intro : forall (A : U), forall (P : A -> Omega), forall (w : A), P w -> Exists A P
+axiom Exists.rec : forall (A : U), forall (P : A -> Omega), forall (C : Omega),
+  (forall (w : A), P w -> C) -> Exists A P -> C
+
+-- 辅助定义：从 Exists 提取 Prop 结论
+def exists_elim_prop (A : U) (P : A -> Omega) (Q : Omega) (h : forall (w : A), P w -> Q) (e : Exists A P) : Q :=
+  Exists.rec A P Q h e
+
+-- 选择公理：从 Exists 中提取 witness
+axiom choice : forall (A : U) (P : A -> Omega) (e : Exists A P), A
+axiom choice_spec : forall (A : U) (P : A -> Omega) (e : Exists A P), P (choice A P e)

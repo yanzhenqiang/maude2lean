@@ -1,0 +1,160 @@
+-- 分数算术引理
+-- 依赖: Order.ott, True.ott, Int.ott, IntOrder.ott, Frac.ott, NatProof.ott
+
+-- =====================================================================
+-- 零分数
+-- =====================================================================
+
+def frac_zero : Frac := mk (ofNat 0) 0
+
+-- =====================================================================
+-- 整数引理
+-- =====================================================================
+
+-- 0 + b = b
+def int_add_zero_left : forall (b : Int), Eq Int (int_add (ofNat 0) b) b :=
+  fun b : Int =>
+    rec.Int (fun x : Int => Eq Int (int_add (ofNat 0) x) x)
+      (fun n : Nat =>
+        eq_subst Nat (nat_add 0 n) n
+          (fun y : Nat => Eq Int (ofNat (nat_add 0 n)) (ofNat y))
+          (nat_add_zero_right n)
+          (refl Int (ofNat (nat_add 0 n))))
+      (fun n : Nat => refl Int (negSucc n))
+      b
+
+-- 1 * (ofNat n) = ofNat n
+def int_mul_one_left_ofNat : forall (n : Nat), Eq Int (int_mul (ofNat 1) (ofNat n)) (ofNat n) :=
+  fun n : Nat => refl Int (ofNat n)
+
+-- int_abs (ofNat 0) = ofNat 0
+def int_abs_zero : Eq Int (int_abs (ofNat 0)) (ofNat 0) :=
+  refl Int (ofNat 0)
+
+-- int_add (ofNat (succ n)) (negSucc n) = ofNat 0
+def int_add_ofNat_negSucc_eq : forall (n : Nat), Eq Int (int_add (ofNat (succ n)) (negSucc n)) (ofNat 0) :=
+  fun n : Nat =>
+    rec.Nat (fun x : Nat => Eq Int (int_add (ofNat (succ x)) (negSucc x)) (ofNat 0))
+      (refl Int (ofNat 0))
+      (fun n' : Nat => fun ih : Eq Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0) =>
+        eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (ofNat (succ (succ n'))) (negSucc (succ n'))) y)
+          ih
+          (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+      n
+
+-- int_add (negSucc n) (ofNat (succ n)) = ofNat 0
+def int_add_negSucc_ofNat_eq : forall (n : Nat), Eq Int (int_add (negSucc n) (ofNat (succ n))) (ofNat 0) :=
+  fun n : Nat =>
+    rec.Nat (fun x : Nat => Eq Int (int_add (negSucc x) (ofNat (succ x))) (ofNat 0))
+      (refl Int (ofNat 0))
+      (fun n' : Nat => fun ih : Eq Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0) =>
+        eq_subst Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (negSucc (succ n')) (ofNat (succ (succ n')))) y)
+          ih
+          (refl Int (int_add (negSucc n') (ofNat (succ n')))))
+      n
+
+-- int_mul a b = int_mul b a
+def int_mul_comm : forall (a : Int) (b : Int), Eq Int (int_mul a b) (int_mul b a) :=
+  fun a : Int => fun b : Int =>
+    rec.Int (fun x : Int => Eq Int (int_mul x b) (int_mul b x))
+      (fun m : Nat =>
+        rec.Int (fun y : Int => Eq Int (int_mul (ofNat m) y) (int_mul y (ofNat m)))
+          (fun n : Nat =>
+            eq_subst Nat (nat_mul m n) (nat_mul n m)
+              (fun y : Nat => Eq Int (ofNat (nat_mul m n)) (ofNat y))
+              (nat_mul_comm m n)
+              (refl Int (ofNat (nat_mul m n))))
+          (fun n : Nat => refl Int (int_mul (ofNat m) (negSucc n)))
+          b)
+      (fun m : Nat =>
+        rec.Int (fun y : Int => Eq Int (int_mul (negSucc m) y) (int_mul y (negSucc m)))
+          (fun n : Nat => refl Int (int_mul (negSucc m) (ofNat n)))
+          (fun n : Nat =>
+            eq_subst Nat (nat_mul (succ m) (succ n)) (nat_mul (succ n) (succ m))
+              (fun y : Nat => Eq Int (ofNat (nat_mul (succ m) (succ n))) (ofNat y))
+              (nat_mul_comm (succ m) (succ n))
+              (refl Int (ofNat (nat_mul (succ m) (succ n)))))
+          b)
+      a
+
+-- int_sub a a = ofNat 0
+def int_sub_self : forall (a : Int), Eq Int (int_sub a a) (ofNat 0) :=
+  fun a : Int =>
+    rec.Int (fun x : Int => Eq Int (int_sub x x) (ofNat 0))
+      (fun n : Nat =>
+        rec.Nat (fun x : Nat => Eq Int (int_sub (ofNat x) (ofNat x)) (ofNat 0))
+          (refl Int (ofNat 0))
+          (fun n' : Nat => fun ih : Eq Int (int_sub (ofNat n') (ofNat n')) (ofNat 0) =>
+            eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
+              (fun y : Int => Eq Int (int_add (ofNat (succ n')) (int_neg (ofNat (succ n')))) y)
+              (int_add_ofNat_negSucc_eq n')
+              (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+          n)
+      (fun n : Nat =>
+        eq_subst Int (int_add (negSucc n) (ofNat (succ n))) (ofNat 0)
+          (fun y : Int => Eq Int (int_add (negSucc n) (int_neg (negSucc n))) y)
+          (int_add_negSucc_ofNat_eq n)
+          (refl Int (int_add (negSucc n) (ofNat (succ n)))))
+      a
+
+-- =====================================================================
+-- 分数引理
+-- =====================================================================
+
+-- frac_mul x y = frac_mul y x
+def frac_mul_comm : forall (x : Frac) (y : Frac), Eq Frac (frac_mul x y) (frac_mul y x) :=
+  fun x : Frac => fun y : Frac =>
+    rec.Frac (fun z : Frac => Eq Frac (frac_mul z y) (frac_mul y z))
+      (fun n1 : Int => fun d1 : Nat =>
+        rec.Frac (fun w : Frac => Eq Frac (frac_mul (mk n1 d1) w) (frac_mul w (mk n1 d1)))
+          (fun n2 : Int => fun d2 : Nat =>
+            eq_subst Int (int_mul n1 n2) (int_mul n2 n1)
+              (fun y_val : Int => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk y_val (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))))
+              (int_mul_comm n1 n2)
+              (eq_subst Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub (nat_mul (succ d2) (succ d1)) (succ zero))
+                (fun y_val : Nat => Eq Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))) (mk (int_mul n1 n2) y_val))
+                (eq_subst Nat (nat_mul (succ d1) (succ d2)) (nat_mul (succ d2) (succ d1))
+                  (fun y_val : Nat => Eq Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero)) (nat_sub y_val (succ zero)))
+                  (nat_mul_comm (succ d1) (succ d2))
+                  (refl Nat (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))))
+                (refl Frac (mk (int_mul n1 n2) (nat_sub (nat_mul (succ d1) (succ d2)) (succ zero))))))
+          y)
+      x
+
+-- frac_abs frac_zero = frac_zero
+def frac_abs_zero : Eq Frac (frac_abs frac_zero) frac_zero :=
+  refl Frac frac_zero
+
+-- frac_abs (mk (ofNat 0) d) = mk (ofNat 0) d
+def frac_abs_ofNat_zero : forall (d : Nat), Eq Frac (frac_abs (mk (ofNat 0) d)) (mk (ofNat 0) d) :=
+  fun d : Nat => refl Frac (mk (ofNat 0) d)
+
+-- =====================================================================
+-- 分数序引理
+-- =====================================================================
+
+-- frac_lt frac_zero (mk (ofNat 1) k)
+def frac_lt_zero_one : forall (k : Nat), frac_lt frac_zero (mk (ofNat 1) k) :=
+  fun k : Nat => le.succ zero zero (le.zero zero)
+
+-- frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k)
+def frac_lt_zero_pos : forall (d : Nat) (k : Nat), frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) :=
+  fun d : Nat => fun k : Nat => le.succ zero d (le.zero d)
+
+-- frac_lt (frac_abs (frac_sub a a)) (frac_inv k)
+def frac_dist_self : forall (a : Frac) (k : Nat),
+  frac_lt (frac_abs (frac_sub a a)) (frac_inv k) :=
+  fun a : Frac => fun k : Nat =>
+    rec.Frac (fun x : Frac => frac_lt (frac_abs (frac_sub x x)) (frac_inv k))
+      (fun n : Int => fun d : Nat =>
+        eq_subst Int (ofNat 0) (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))))
+          (fun y : Int => frac_lt (mk y (nat_sub (nat_mul (succ d) (succ d)) (succ zero))) (frac_inv k))
+          (eq_sym Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))) (ofNat 0)
+            (eq_subst Int (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d)))) (ofNat 0)
+              (fun y : Int => Eq Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))) (int_abs y))
+              (int_sub_self (int_mul n (ofNat (succ d))))
+              (refl Int (int_abs (int_sub (int_mul n (ofNat (succ d))) (int_mul n (ofNat (succ d))))))))
+          (le_one_succ_sub_one (nat_mul (succ d) (succ d))))
+      a

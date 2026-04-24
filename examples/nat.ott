@@ -1,0 +1,6 @@
+-- Basic Nat type for demonstration
+axiom Nat : U
+axiom zero : Nat
+axiom succ : Nat -> Nat
+
+def id_nat (x : Nat) : Nat := x

@@ -13,7 +13,7 @@ pub enum LocalDecl {
         ty: Expr,
         bi: BinderInfo,
     },
-    /// ldecl: let-binding
+    /// ldecl: let-binding (implementation detail, not in core syntax)
     LDecl {
         index: u64,
         name: Name,
@@ -76,7 +76,6 @@ pub struct LocalCtx {
     /// Stack of binder names for BVar -> FVar conversion (index 0 = outermost)
     bvar_names: Vec<Name>,
     /// Stack of binder types for BVar lookup (index 0 = outermost)
-    /// Types are stored as FVar-based expressions
     bvar_types: Vec<Expr>,
 }
 
@@ -104,7 +103,6 @@ impl LocalCtx {
     }
 
     /// Replace BVars that refer to outer context binders with FVars.
-    /// BVars bound by nested Lambda/Pi/Let within `e` are left unchanged.
     pub fn replace_bvars_with_fvars(&self, e: &Expr) -> Expr {
         self.replace_bvars_with_fvars_depth(e, 0)
     }
@@ -139,18 +137,22 @@ impl LocalCtx {
                 Rc::new(self.replace_bvars_with_fvars_depth(ty, depth)),
                 Rc::new(self.replace_bvars_with_fvars_depth(body, depth + 1)),
             ),
-            Expr::Let(name, ty, value, body, nondep) => Expr::Let(
-                name.clone(),
-                Rc::new(self.replace_bvars_with_fvars_depth(ty, depth)),
-                Rc::new(self.replace_bvars_with_fvars_depth(value, depth)),
-                Rc::new(self.replace_bvars_with_fvars_depth(body, depth + 1)),
-                *nondep,
+            Expr::Eq(a, t, u) => Expr::Eq(
+                Rc::new(self.replace_bvars_with_fvars_depth(a, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(t, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(u, depth)),
+            ),
+            Expr::Cast(a, b, e, t) => Expr::Cast(
+                Rc::new(self.replace_bvars_with_fvars_depth(a, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(b, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(e, depth)),
+                Rc::new(self.replace_bvars_with_fvars_depth(t, depth)),
             ),
             _ => e.clone(),
         }
     }
 
-    /// Push a binder for BVar lookup. Converts BVars in `ty` to FVars using current context.
+    /// Push a binder for BVar lookup.
     pub fn push_bvar(&mut self, name: Name, ty: Expr) {
         let converted_ty = self.replace_bvars_with_fvars(&ty);
         self.bvar_names.push(name);
@@ -164,7 +166,6 @@ impl LocalCtx {
     }
 
     /// Get the type of a bound variable by de Bruijn index.
-    /// BVar(0) is the innermost binder.
     pub fn get_bvar_type(&self, idx: u64) -> Option<&Expr> {
         let len = self.bvar_types.len();
         if idx as usize >= len {
@@ -272,12 +273,16 @@ impl LocalCtx {
                         }
                         LocalDecl::LDecl { user_name, ty, value, .. } => {
                             if !remove_dead_let || result.has_fvar() {
-                                result = Expr::Let(
-                                    user_name.clone(),
-                                    Rc::new(ty.clone()),
+                                // let-binding: inline by substitution in the outer layer.
+                                // For now, encode as (λ(x:ty). result) value
+                                result = Expr::App(
+                                    Rc::new(Expr::Lambda(
+                                        user_name.clone(),
+                                        BinderInfo::Default,
+                                        Rc::new(ty.clone()),
+                                        Rc::new(result),
+                                    )),
                                     Rc::new(value.clone()),
-                                    Rc::new(result),
-                                    false,
                                 );
                             }
                         }
@@ -305,12 +310,15 @@ impl LocalCtx {
                         }
                         LocalDecl::LDecl { user_name, ty, value, .. } => {
                             if !remove_dead_let || result.has_fvar() {
-                                result = Expr::Let(
-                                    user_name.clone(),
-                                    Rc::new(ty.clone()),
+                                // let-binding in Pi: (λ(x:ty). result) value
+                                result = Expr::App(
+                                    Rc::new(Expr::Lambda(
+                                        user_name.clone(),
+                                        BinderInfo::Default,
+                                        Rc::new(ty.clone()),
+                                        Rc::new(result),
+                                    )),
                                     Rc::new(value.clone()),
-                                    Rc::new(result),
-                                    false,
                                 );
                             }
                         }
