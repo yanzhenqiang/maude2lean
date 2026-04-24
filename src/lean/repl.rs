@@ -284,6 +284,10 @@ impl Repl {
             return self.handle_defeq(&input[7..]).map(|_| false);
         }
 
+        if input.starts_with(":solve ") {
+            return self.handle_solve(&input[7..]).map(|_| false);
+        }
+
         // Default: try to infer and reduce the expression
         let expr = self.parse_and_convert(input)?;
         let mut tc = TypeChecker::with_local_ctx(&mut self.tc_state, super::local_ctx::LocalCtx::new());
@@ -346,6 +350,9 @@ impl Repl {
             }
             ParsedDecl::Theorem { name, params, ret_ty, value } => {
                 self.process_def_or_theorem(name, params, Some(ret_ty), value, true)
+            }
+            ParsedDecl::Solve { name, params, ret_ty, value } => {
+                self.process_solve(name, params, ret_ty, value)
             }
             ParsedDecl::Inductive { name, ty, ctors, num_params } => {
                 let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
@@ -752,6 +759,95 @@ impl Repl {
         Ok(())
     }
 
+    fn process_solve(
+        &mut self,
+        name: String,
+        params: Vec<(String, super::repl_parser::ParsedExpr)>,
+        ret_ty: super::repl_parser::ParsedExpr,
+        value: super::repl_parser::ParsedExpr,
+    ) -> Result<(), String> {
+        // Convert parameter types
+        let mut param_exprs: Vec<(String, Expr)> = Vec::new();
+        let mut bound_vars: Vec<String> = Vec::new();
+        for (pname, pty) in &params {
+            let ty_expr = pty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+            param_exprs.push((pname.clone(), ty_expr));
+            bound_vars.push(pname.clone());
+        }
+
+        // Convert return type and value
+        let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+        let value_expr = value.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+
+        // Embed params into value as lambdas
+        let mut final_value = value_expr;
+        for (pname, pty) in param_exprs.iter().rev() {
+            final_value = Expr::Lambda(
+                Name::new(pname),
+                BinderInfo::Default,
+                Rc::new(pty.clone()),
+                Rc::new(final_value),
+            );
+        }
+
+        // Build final type: Pi params, ret_ty
+        let mut final_ty = ret_ty_expr;
+        for (pname, pty) in param_exprs.iter().rev() {
+            final_ty = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(final_ty));
+        }
+
+        // Clear any stale mvar type registrations
+        self.tc_state.clear_mvar_types();
+
+        // Type-check in solve mode (allows unassigned metavariables)
+        let mut tc = TypeChecker::with_allow_unassigned_mvar(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+        match tc.check(&final_value, &final_ty) {
+            Ok(_) => {}
+            Err(e) => return Err(format!("Solve type check failed: {}", e)),
+        }
+
+        // Collect solve-variable info: gather all MVars from value and type
+        let mut mvar_names = Vec::new();
+        final_value.collect_mvars(&mut mvar_names);
+        final_ty.collect_mvars(&mut mvar_names);
+
+        let mut solve_vars: Vec<(Name, Expr, Option<Expr>)> = Vec::new();
+        for mvar_name in &mvar_names {
+            let mut ty = self.tc_state.get_mvar_type(mvar_name).cloned();
+            let assignment = self.tc_state.get_mvar_assignment(mvar_name).cloned();
+            if ty.is_none() {
+                if let Some(ref val) = assignment {
+                    let mut tc = TypeChecker::with_allow_unassigned_mvar(
+                        &mut self.tc_state, super::local_ctx::LocalCtx::new());
+                    ty = tc.infer(val).ok();
+                }
+            }
+            if let Some(t) = ty {
+                solve_vars.push((mvar_name.clone(), t, assignment));
+            }
+        }
+
+        if !self.quiet {
+            println!("  Solved: {}", name);
+            if solve_vars.is_empty() {
+                println!("    (no solve variables)");
+            } else {
+                for (mvar_name, ty, val) in &solve_vars {
+                    match val {
+                        Some(v) => println!("    ?{} : {} = {}", mvar_name.to_string(), format_expr(ty), format_expr(v)),
+                        None => println!("    ?{} : {} (unassigned)", mvar_name.to_string(), format_expr(ty)),
+                    }
+                }
+            }
+        }
+
+        // Optionally register as an opaque definition for later reference
+        // For now, we just bind the name to its value in env_bindings
+        self.env_bindings.insert(name.clone(), final_value.clone());
+
+        Ok(())
+    }
+
     fn handle_axiom(&mut self, rest: &str) -> Result<(), String> {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
         if parts.len() != 2 {
@@ -872,6 +968,52 @@ impl Repl {
         if !self.quiet {
             println!("  Added theorem: {}", name);
         }
+        Ok(())
+    }
+
+    fn handle_solve(&mut self, rest: &str) -> Result<(), String> {
+        let name_end = rest.find(|c: char| c.is_whitespace() || c == ':' || c == '=')
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].trim().to_string();
+        let rest_after_name = rest[name_end..].trim_start().to_string();
+
+        if !rest_after_name.starts_with(':') {
+            return Err("Usage: :solve <name> : <type> := <expr>".to_string());
+        }
+        let rest = &rest_after_name[1..];
+        let parts: Vec<&str> = rest.splitn(2, ":=").collect();
+        if parts.len() != 2 {
+            return Err("Usage: :solve <name> : <type> := <expr>".to_string());
+        }
+        let ty_str = parts[0].trim();
+        let expr_str = parts[1].trim();
+
+        let ty = self.parse_and_convert(ty_str)?;
+        let expr = self.parse_and_convert(expr_str)?;
+
+        self.tc_state.clear_mvar_types();
+        let mut tc = TypeChecker::with_allow_unassigned_mvar(&mut self.tc_state, super::local_ctx::LocalCtx::new());
+        tc.check(&expr, &ty).map_err(|e| format!("Solve type check failed: {}", e))?;
+
+        let mut solve_vars: Vec<(Name, Expr, Option<Expr>)> = Vec::new();
+        for (mvar_name, mvar_ty) in self.tc_state.iter_mvar_types() {
+            let assigned = self.tc_state.get_mvar_assignment(mvar_name).cloned();
+            solve_vars.push((mvar_name.clone(), mvar_ty.clone(), assigned));
+        }
+
+        println!("  Solved: {}", name);
+        if solve_vars.is_empty() {
+            println!("    (no solve variables)");
+        } else {
+            for (mvar_name, mvar_ty, val) in &solve_vars {
+                match val {
+                    Some(v) => println!("    ?{} : {} = {}", mvar_name.to_string(), format_expr(mvar_ty), format_expr(v)),
+                    None => println!("    ?{} : {} (unassigned)", mvar_name.to_string(), format_expr(mvar_ty)),
+                }
+            }
+        }
+
+        self.env_bindings.insert(name.clone(), expr.clone());
         Ok(())
     }
 
@@ -997,6 +1139,7 @@ impl Repl {
         println!("  :reduce <expr>                Reduce to WHNF");
         println!("  :nf <expr>                    Reduce to full NF");
         println!("  :defeq <e1> = <e2>            Check definitional equality");
+        println!("  :solve <name> : <type> := <expr>  Solve with metavariables");
         println!("  :help                         Show this help");
         println!("  :quit                         Exit");
         println!();

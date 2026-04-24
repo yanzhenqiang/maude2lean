@@ -211,7 +211,7 @@ impl TuiApp {
             return None;
         }
         let kind = words[0];
-        if kind != "theorem" && kind != "def" && kind != "inductive" && kind != "axiom" {
+        if kind != "theorem" && kind != "def" && kind != "inductive" && kind != "axiom" && kind != "solve" {
             return None;
         }
         let name = words[1];
@@ -224,7 +224,7 @@ impl TuiApp {
     }
 
     fn try_infer_expr(&mut self, line: &str) -> Option<String> {
-        let stripped = if line.starts_with("theorem") || line.starts_with("def") || line.starts_with("axiom") {
+        let stripped = if line.starts_with("theorem") || line.starts_with("def") || line.starts_with("axiom") || line.starts_with("solve") {
             if let Some(pos) = line.find(":=") {
                 line[pos + 2..].trim()
             } else {

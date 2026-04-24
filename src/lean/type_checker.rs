@@ -21,6 +21,8 @@ pub struct TypeCheckerState {
     mvar_assignments: HashMap<Name, Expr>,
     /// Universe level parameter substitutions: u -> level
     level_subst: HashMap<Name, Level>,
+    /// Metavariable types for solve mode: ?m -> type
+    mvar_types: HashMap<Name, Expr>,
 }
 
 impl TypeCheckerState {
@@ -32,6 +34,7 @@ impl TypeCheckerState {
             failure_cache: HashMap::new(),
             mvar_assignments: HashMap::new(),
             level_subst: HashMap::new(),
+            mvar_types: HashMap::new(),
         }
     }
 
@@ -75,6 +78,22 @@ impl TypeCheckerState {
         self.level_subst.clear();
     }
 
+    pub fn get_mvar_type(&self, name: &Name) -> Option<&Expr> {
+        self.mvar_types.get(name)
+    }
+
+    pub fn set_mvar_type(&mut self, name: &Name, ty: Expr) {
+        self.mvar_types.insert(name.clone(), ty);
+    }
+
+    pub fn clear_mvar_types(&mut self) {
+        self.mvar_types.clear();
+    }
+
+    pub fn iter_mvar_types(&self) -> std::collections::hash_map::Iter<'_, Name, Expr> {
+        self.mvar_types.iter()
+    }
+
     fn level_contains_param(level: &Level, name: &Name) -> bool {
         match level {
             Level::Param(n) => n == name,
@@ -92,6 +111,8 @@ impl TypeCheckerState {
 pub struct TypeChecker<'a> {
     st: &'a mut TypeCheckerState,
     lctx: LocalCtx,
+    /// When true, unassigned metavariables are allowed in expressions (solve mode)
+    allow_unassigned_mvar: bool,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -99,11 +120,16 @@ impl<'a> TypeChecker<'a> {
         TypeChecker {
             st,
             lctx: LocalCtx::new(),
+            allow_unassigned_mvar: false,
         }
     }
 
     pub fn with_local_ctx(st: &'a mut TypeCheckerState, lctx: LocalCtx) -> Self {
-        TypeChecker { st, lctx }
+        TypeChecker { st, lctx, allow_unassigned_mvar: false }
+    }
+
+    pub fn with_allow_unassigned_mvar(st: &'a mut TypeCheckerState, lctx: LocalCtx) -> Self {
+        TypeChecker { st, lctx, allow_unassigned_mvar: true }
     }
 
     /// Infer the type of an expression
@@ -113,6 +139,15 @@ impl<'a> TypeChecker<'a> {
 
     /// Check that an expression has a given type
     pub fn check(&mut self, e: &Expr, expected_ty: &Expr) -> Result<Expr, String> {
+        // In solve mode, unassigned metavariables adopt the expected type
+        if self.allow_unassigned_mvar {
+            if let Expr::MVar(name) = e {
+                if self.st.get_mvar_assignment(name).is_none() {
+                    self.st.set_mvar_type(name, expected_ty.clone());
+                    return Ok(expected_ty.clone());
+                }
+            }
+        }
         let inferred = self.infer(e)?;
         if self.is_def_eq(&inferred, expected_ty) {
             Ok(inferred)
@@ -139,9 +174,13 @@ impl<'a> TypeChecker<'a> {
             Expr::MVar(name) => {
                 if let Some(val) = self.st.get_mvar_assignment(name).cloned() {
                     return self.infer_type(&val)
-                } else {
-                    return Err(format!("Unassigned metavariable {}", name.to_string()))
                 }
+                if self.allow_unassigned_mvar {
+                    if let Some(ty) = self.st.get_mvar_type(name).cloned() {
+                        return Ok(ty);
+                    }
+                }
+                return Err(format!("Unassigned metavariable {}", name.to_string()))
             }
             _ => {}
         }

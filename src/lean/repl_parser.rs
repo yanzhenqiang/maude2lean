@@ -31,6 +31,8 @@ pub enum ParsedExpr {
     Match(Box<ParsedExpr>, Box<ParsedExpr>, Vec<(ParsedExpr, ParsedExpr)>),
     /// by tactic1; tactic2; ...
     TacticBlock(Vec<String>),
+    /// Metavariable / solve variable: ?name
+    MVar(String),
 }
 
 impl ParsedExpr {
@@ -101,6 +103,7 @@ impl ParsedExpr {
             ParsedExpr::TacticBlock(_) => {
                 panic!("TacticBlock should be handled by the REPL, not converted directly to Expr")
             }
+            ParsedExpr::MVar(name) => Expr::mk_mvar(Name::new(name)),
         }
     }
 
@@ -290,6 +293,13 @@ pub enum ParsedDecl {
         types: Vec<(String, ParsedExpr, Vec<(String, ParsedExpr)>, usize)>,
         // (name, ty, ctors, num_params)
     },
+    /// Solve declaration: like theorem but allows unassigned metavariables (solve variables)
+    Solve {
+        name: String,
+        params: Vec<(String, ParsedExpr)>,
+        ret_ty: ParsedExpr,
+        value: ParsedExpr,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -380,6 +390,8 @@ impl Parser {
             self.parse_axiom_decl()
         } else if self.starts_with_keyword("mutual") {
             self.parse_mutual_inductive_decl()
+        } else if self.starts_with_keyword("solve") {
+            self.parse_solve_decl()
         } else {
             Err(format!("Expected declaration, got {:?}", self.peek()))
         }
@@ -404,6 +416,17 @@ impl Parser {
         let (params, ret_ty, value) = self.parse_decl_body()?;
         let ret_ty = ret_ty.ok_or("Theorem must have an explicit return type".to_string())?;
         Ok(ParsedDecl::Theorem { name, params, ret_ty, value })
+    }
+
+    fn parse_solve_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(5); // consume "solve"
+        self.skip_whitespace();
+        let name = self.parse_ident_raw()?;
+        self.skip_whitespace();
+
+        let (params, ret_ty, value) = self.parse_decl_body()?;
+        let ret_ty = ret_ty.ok_or("Solve must have an explicit return type".to_string())?;
+        Ok(ParsedDecl::Solve { name, params, ret_ty, value })
     }
 
     fn parse_axiom_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -947,6 +970,7 @@ impl Parser {
                 || self.starts_with_keyword("def") || self.starts_with_keyword("theorem")
                 || self.starts_with_keyword("inductive") || self.starts_with_keyword("structure") || self.starts_with_keyword("axiom")
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
+                || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("end") {
                 break;
             }
@@ -979,7 +1003,11 @@ impl Parser {
             Some('\\') => self.parse_lambda(),
             Some('0'..='9') => self.parse_nat_lit(),
             Some(_) => {
-                if self.starts_with_keyword("fun") {
+                if self.peek() == Some('?') {
+                    self.advance(); // consume '?'
+                    let name = self.parse_ident_raw()?;
+                    Ok(ParsedExpr::MVar(name))
+                } else if self.starts_with_keyword("fun") {
                     self.parse_fun()
                 } else if self.starts_with_keyword("let") {
                     self.parse_let()

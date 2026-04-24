@@ -630,6 +630,24 @@ impl Expr {
         }
     }
 
+    /// Collect all named metavariables in the expression
+    pub fn collect_mvars(&self, out: &mut Vec<Name>) {
+        match self {
+            Expr::MVar(n) => {
+                if !out.contains(n) {
+                    out.push(n.clone());
+                }
+            }
+            Expr::App(f, a) => { f.collect_mvars(out); a.collect_mvars(out); }
+            Expr::Lambda(_, _, ty, body) => { ty.collect_mvars(out); body.collect_mvars(out); }
+            Expr::Pi(_, _, ty, body) => { ty.collect_mvars(out); body.collect_mvars(out); }
+            Expr::Let(_, ty, value, body, _) => { ty.collect_mvars(out); value.collect_mvars(out); body.collect_mvars(out); }
+            Expr::MData(_, e) => e.collect_mvars(out),
+            Expr::Proj(_, _, e) => e.collect_mvars(out),
+            _ => {}
+        }
+    }
+
     /// Check if expression contains any free variables
     pub fn has_fvar(&self) -> bool {
         match self {
