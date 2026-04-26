@@ -33,6 +33,8 @@ pub struct Repl {
     quiet: bool,
     /// Variables declared at file scope, implicitly added to subsequent def/theorem params
     file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
+    /// User-defined infix operators persisted across files and REPL sessions
+    infix_ops: HashMap<String, (i32, String, bool)>,
 }
 
 /// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
@@ -122,6 +124,7 @@ impl Repl {
             env_bindings: HashMap::new(),
             quiet: false,
             file_variables: Vec::new(),
+            infix_ops: HashMap::new(),
         };
         repl.load_quot();
         repl
@@ -187,7 +190,7 @@ impl Repl {
             self.file_variables.clear();
             let contents = fs::read_to_string(filepath)
                 .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
-            let mut parser = ReplParser::new(&contents);
+            let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
             let decls = parser.parse_file()
                 .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
 
@@ -308,7 +311,7 @@ impl Repl {
     }
 
     fn parse_and_convert(&self, input: &str) -> Result<Expr, String> {
-        let mut parser = ReplParser::new(input);
+        let mut parser = ReplParser::new_with_infix_ops(input, self.infix_ops.clone());
         let parsed = parser.parse_expr()?;
         Ok(parsed.to_expr(&self.env_bindings, &self.env, &mut Vec::new()))
     }
@@ -318,7 +321,7 @@ impl Repl {
         self.file_variables.clear();
         let contents = fs::read_to_string(filepath)
             .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
-        let mut parser = ReplParser::new(&contents);
+        let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
         let decls = parser.parse_file()
             .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
 
@@ -374,7 +377,8 @@ impl Repl {
                 }
                 Ok(())
             }
-            ParsedDecl::Infix { symbol, func_name, precedence: _, left_assoc: _ } => {
+            ParsedDecl::Infix { symbol, func_name, precedence, left_assoc } => {
+                self.infix_ops.insert(symbol.clone(), (precedence, func_name.clone(), left_assoc));
                 if !self.quiet {
                     println!("  Infix: {} => {}", symbol, func_name);
                 }
@@ -712,7 +716,7 @@ impl Repl {
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
 
                 for tactic_cmd in tactics {
-                    execute_tactic(env, env_bindings, &mut engine, tactic_cmd)?;
+                    execute_tactic(env, env_bindings, &self.infix_ops, &mut engine, tactic_cmd)?;
                 }
 
                 if engine.num_goals() > 0 {
@@ -853,7 +857,7 @@ impl Repl {
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
 
                 for tactic_cmd in tactics {
-                    execute_tactic(env, env_bindings, &mut engine, tactic_cmd)?;
+                    execute_tactic(env, env_bindings, &self.infix_ops, &mut engine, tactic_cmd)?;
                 }
 
                 if engine.num_goals() > 0 {
@@ -1319,8 +1323,8 @@ impl Repl {
 }
 
 /// Parse an expression for tactic use (standalone to avoid borrow conflicts)
-fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, input: &str) -> Result<Expr, String> {
-    let mut parser = ReplParser::new(input);
+fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, infix_ops: &HashMap<String, (i32, String, bool)>, input: &str) -> Result<Expr, String> {
+    let mut parser = ReplParser::new_with_infix_ops(input, infix_ops.clone());
     let parsed = parser.parse_expr().map_err(|e| format!("parse error: {}", e))?;
     Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
 }
@@ -1366,6 +1370,7 @@ fn resolve_tactic_vars(expr: &Expr, engine: &TacticEngine) -> Expr {
 fn execute_tactic(
     env: &Environment,
     env_bindings: &HashMap<String, Expr>,
+    infix_ops: &HashMap<String, (i32, String, bool)>,
     engine: &mut TacticEngine,
     cmd: &str,
 ) -> Result<(), String> {
@@ -1393,7 +1398,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("exact requires an expression".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_exact(&expr)
         }
@@ -1401,7 +1406,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("apply requires an expression".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_apply(&expr)
         }
@@ -1415,7 +1420,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("rewrite requires an equality hypothesis".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_rewrite(&expr)
         }
@@ -1450,9 +1455,9 @@ fn execute_tactic(
             let ty_str = after_colon[..assign_pos].trim();
             let proof_str = after_colon[assign_pos + 2..].trim();
 
-            let ty = parse_tactic_expr(env_bindings, env, ty_str)?;
+            let ty = parse_tactic_expr(env_bindings, env, infix_ops, ty_str)?;
             let ty = resolve_tactic_vars(&ty, engine);
-            let proof = parse_tactic_expr(env_bindings, env, proof_str)?;
+            let proof = parse_tactic_expr(env_bindings, env, infix_ops, proof_str)?;
             let proof = resolve_tactic_vars(&proof, engine);
             engine.tactic_have(&name, &ty, &proof)
         }

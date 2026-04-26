@@ -330,6 +330,14 @@ impl Parser {
         }
     }
 
+    pub fn new_with_infix_ops(input: &str, infix_ops: HashMap<String, (i32, String, bool)>) -> Self {
+        Parser {
+            input: input.chars().collect(),
+            pos: 0,
+            infix_ops,
+        }
+    }
+
     /// Parse a single expression.
     /// Find the start position of the current line (position after last '\n' or 0)
     fn line_start(&self, pos: usize) -> usize {
@@ -1060,6 +1068,10 @@ impl Parser {
                             if nc.is_alphanumeric() || *nc == '_' || *nc == '\'' {
                                 continue;
                             }
+                            // Don't match prefixes of -> or =>
+                            if *nc == '>' {
+                                continue;
+                            }
                         }
                         if matched_op.is_none() || sym.len() > matched_op.as_ref().unwrap().0.len() {
                             matched_op = Some((sym.clone(), *prec, *left_assoc, func.clone()));
@@ -1127,6 +1139,7 @@ impl Parser {
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
                 || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
+                || self.starts_with_keyword("if") || self.starts_with_keyword("then") || self.starts_with_keyword("else")
                 || self.starts_with_keyword("end") {
                 break;
             }
@@ -1171,6 +1184,8 @@ impl Parser {
                     self.parse_have()
                 } else if self.starts_with_keyword("match") {
                     self.parse_match()
+                } else if self.starts_with_keyword("if") {
+                    self.parse_if()
                 } else if self.starts_with_keyword("forall") {
                     self.parse_forall()
                 } else if self.starts_with_keyword("exists") {
@@ -1394,6 +1409,47 @@ impl Parser {
         }
 
         Ok(ParsedExpr::Match(Box::new(scrutinee), Box::new(motive), branches))
+    }
+
+    /// Parse if/then/else: if c : T then t else e
+    /// Desugars to: match c : T with | true => t | false => e
+    fn parse_if(&mut self) -> Result<ParsedExpr, String> {
+        self.advance_by(2); // consume "if"
+        self.skip_whitespace();
+
+        let cond = self.parse_expr()?;
+        self.skip_whitespace();
+
+        if self.peek() != Some(':') {
+            return Err("Expected ':' after if condition (if c : T then t else e)".to_string());
+        }
+        self.advance();
+        let motive = self.parse_expr()?;
+        self.skip_whitespace();
+
+        if !self.starts_with_keyword("then") {
+            return Err("Expected 'then' after if motive".to_string());
+        }
+        self.advance_by(4);
+        self.skip_whitespace();
+        let then_branch = self.parse_expr()?;
+        self.skip_whitespace();
+
+        if !self.starts_with_keyword("else") {
+            return Err("Expected 'else' after then branch".to_string());
+        }
+        self.advance_by(4);
+        self.skip_whitespace();
+        let else_branch = self.parse_expr()?;
+
+        Ok(ParsedExpr::Match(
+            Box::new(cond),
+            Box::new(motive),
+            vec![
+                (ParsedExpr::Const("true".to_string()), then_branch),
+                (ParsedExpr::Const("false".to_string()), else_branch),
+            ],
+        ))
     }
 
     /// Parse forall: forall (x : A), B  or  forall (x : A) -> B

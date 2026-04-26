@@ -39,7 +39,7 @@ inductive Eq : forall (A : Type) (a : A) (b : A), Prop where
 | refl : forall (A : Type) (a : A), Eq A a a
 
 def not (b : Bool) : Bool :=
-  match b : Bool with | false => true | true => false
+  if b : Bool then false else true
 
 def is_zero (n : Nat) : Bool :=
   rec.Nat (fun _ => Bool) true (fun n' ih => false) n
@@ -205,11 +205,11 @@ def nat_to_digit (n : Nat) : Digit :=
 
 def digit_add_result (d1 d2 : Digit) (carry : Bool) : Digit :=
   nat_to_digit (nat_add (nat_add (digit_to_nat d1) (digit_to_nat d2))
-    (match carry : Nat with | false => zero | true => succ zero))
+    (if carry : Nat then succ zero else zero))
 
 def digit_add_carry (d1 d2 : Digit) (carry : Bool) : Bool :=
   nat_gt (nat_add (nat_add (digit_to_nat d1) (digit_to_nat d2))
-    (match carry : Nat with | false => zero | true => succ zero))
+    (if carry : Nat then succ zero else zero))
     (succ (succ (succ (succ (succ (succ (succ (succ (succ zero)))))))))
 
 def digit_eq (d1 d2 : Digit) : Bool :=
@@ -219,7 +219,7 @@ def le_add (a b : List Digit) : List Digit :=
   rec.List Digit (fun _ => List Digit -> Bool -> List Digit)
     (fun b carry =>
       rec.List Digit (fun _ => Bool -> List Digit)
-        (fun carry => match carry : List Digit with | false => nil Digit | true => cons Digit d1 (nil Digit))
+        (fun carry => if carry : List Digit then cons Digit d1 (nil Digit) else nil Digit)
         (fun db b' ih carry =>
           cons Digit (digit_add_result db d0 carry) (ih (digit_add_carry db d0 carry)))
         b carry)
@@ -237,7 +237,7 @@ def le_eq (a b : List Digit) : Bool :=
     (fun b => rec.List Digit (fun _ => Bool) true (fun db b' ih => false) b)
     (fun da a' ih b =>
       rec.List Digit (fun _ => Bool) false
-        (fun db b' ih2 => match digit_eq da db : Bool with | false => false | true => ih b') b)
+        (fun db b' ih2 => if digit_eq da db : Bool then ih b' else false) b)
     a b
 
 -- -----------------------------------------------------------------
@@ -259,17 +259,21 @@ def nat_sub (m n : Nat) : Nat :=
 def nat_mul (m n : Nat) : Nat :=
   rec.Nat (fun _ => Nat) zero (fun n' ih => nat_add m ih) n
 
+infix + => nat_add
+infix - => nat_sub
+infix * => nat_mul
+
 def nat_div_fuel (fuel : Nat) (m n : Nat) : Nat :=
   rec.Nat (fun _ => Nat -> Nat -> Nat)
     (fun m n => zero)
     (fun fuel' ih => fun m n =>
-      match nat_gt n zero : Nat with
-      | false => zero
-      | true => match nat_gt m n : Nat with
-        | false => match nat_eq m n : Nat with
-          | true => succ zero
-          | false => zero
-        | true => succ (ih (nat_sub m n) n))
+      if nat_gt n zero : Nat then
+        if nat_gt m n : Nat then
+          succ (ih (nat_sub m n) n)
+        else
+          if nat_eq m n : Nat then succ zero else zero
+      else
+        zero)
     fuel
     m
     n
@@ -312,9 +316,7 @@ def sd_abs (sd : SignedDecimal) : Decimal :=
   match sd : Decimal with | mk _ d => d
 
 def add_pos_neg (da db : Decimal) : SignedDecimal :=
-  (match dec_lt da db : SignedDecimal with
-   | true => mk neg (dec_sub db da)
-   | false => mk pos (dec_sub da db))
+  if dec_lt da db : SignedDecimal then mk neg (dec_sub db da) else mk pos (dec_sub da db)
 
 def signed_dec_add (a b : SignedDecimal) : SignedDecimal :=
   match a : SignedDecimal with | mk sa da =>
@@ -400,16 +402,18 @@ def float_pad (d : Decimal) (n : Decimal) : Decimal :=
 def float_add (a b : FloatDecimal) : FloatDecimal :=
   match a : FloatDecimal with | pair Decimal Decimal da pa =>
     match b : FloatDecimal with | pair Decimal Decimal db pb =>
-      (match dec_lt pa pb : FloatDecimal with
-       | true => pair Decimal Decimal (dec_add (float_pad da (dec_sub pb pa)) db) pb
-       | false => pair Decimal Decimal (dec_add da (float_pad db (dec_sub pa pb))) pa)
+      if dec_lt pa pb : FloatDecimal then
+        pair Decimal Decimal (dec_add (float_pad da (dec_sub pb pa)) db) pb
+      else
+        pair Decimal Decimal (dec_add da (float_pad db (dec_sub pa pb))) pa
 
 def float_sub (a b : FloatDecimal) : FloatDecimal :=
   match a : FloatDecimal with | pair Decimal Decimal da pa =>
     match b : FloatDecimal with | pair Decimal Decimal db pb =>
-      (match dec_lt pa pb : FloatDecimal with
-       | true => pair Decimal Decimal (dec_sub (float_pad da (dec_sub pb pa)) db) pb
-       | false => pair Decimal Decimal (dec_sub da (float_pad db (dec_sub pa pb))) pa)
+      if dec_lt pa pb : FloatDecimal then
+        pair Decimal Decimal (dec_sub (float_pad da (dec_sub pb pa)) db) pb
+      else
+        pair Decimal Decimal (dec_sub da (float_pad db (dec_sub pa pb))) pa
 
 def float_mul (a b : FloatDecimal) : FloatDecimal :=
   match a : FloatDecimal with | pair Decimal Decimal da pa =>
@@ -492,27 +496,21 @@ def list_append (A : Type) (xs ys : List A) : List A :=
 def list_filter (A : Type) (p : A -> Bool) (xs : List A) : List A :=
   rec.List A (fun _ => List A)
     (nil A)
-    (fun x xs ih => match p x : List A with
-      | true => cons A x ih
-      | false => ih)
+    (fun x xs ih => if p x : List A then cons A x ih else ih)
     xs
 
 -- 列表最大值（空列表返回默认值）
 def list_max (A : Type) (le : A -> A -> Bool) (default : A) (xs : List A) : A :=
   rec.List A (fun _ => A)
     default
-    (fun x xs ih => match le x ih : A with
-      | true => ih
-      | false => x)
+    (fun x xs ih => if le x ih : A then ih else x)
     xs
 
 -- 列表最小值（空列表返回默认值）
 def list_min (A : Type) (le : A -> A -> Bool) (default : A) (xs : List A) : A :=
   rec.List A (fun _ => A)
     default
-    (fun x xs ih => match le x ih : A with
-      | true => x
-      | false => ih)
+    (fun x xs ih => if le x ih : A then x else ih)
     xs
 
 -- 列表长度
@@ -579,7 +577,7 @@ def list_lower_bound (pivot : Nat) (xs : List Nat) : Prop :=
 def list_mem (x : Nat) (xs : List Nat) : Bool :=
   rec.List Nat (fun _ => Bool)
     false
-    (fun y ys ih => match nat_eq x y : Bool with | true => true | false => ih)
+    (fun y ys ih => if nat_eq x y : Bool then true else ih)
     xs
 
 -- 基础引理：空列表有序
