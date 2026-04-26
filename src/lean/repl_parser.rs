@@ -1195,7 +1195,9 @@ impl Parser {
                 || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
                 || self.starts_with_keyword("if") || self.starts_with_keyword("then") || self.starts_with_keyword("else")
-                || self.starts_with_keyword("section") || self.starts_with_keyword("end") {
+                || self.starts_with_keyword("section") || self.starts_with_keyword("end")
+                || self.starts_with_keyword("variable") || self.starts_with_keyword("mutual")
+                || self.starts_with_keyword("import") {
                 break;
             }
             atoms.push(self.parse_atom()?);
@@ -1885,7 +1887,7 @@ mod tests {
         let src = std::fs::read_to_string(path).unwrap();
         let mut p = Parser::new(&src);
         let decls = p.parse_file().unwrap();
-        assert_eq!(decls.len(), 6);
+        assert_eq!(decls.len(), 7);
     }
 
     #[test]
@@ -1998,5 +2000,26 @@ mod tests {
             }
             _ => panic!("Expected Pi, got {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_parse_variable_decl() {
+        let src = "variable (n : Nat)\n\ndef test1 := succ n\n";
+        let mut p = Parser::new(src);
+        let decls = p.parse_file().unwrap();
+        assert_eq!(decls.len(), 2);
+        assert!(matches!(&decls[0], ParsedDecl::Variable { .. }));
+        assert!(matches!(&decls[1], ParsedDecl::Def { .. }));
+    }
+
+    #[test]
+    fn test_parse_variable_after_inductive() {
+        let src = "inductive Nat where\n| zero : Nat\n| succ : Nat -> Nat\n\nvariable (n : Nat)\n\ndef test1 := succ n\n";
+        let mut p = Parser::new(src);
+        let decls = p.parse_file().unwrap();
+        assert_eq!(decls.len(), 3);
+        assert!(matches!(&decls[0], ParsedDecl::Inductive { .. }));
+        assert!(matches!(&decls[1], ParsedDecl::Variable { .. }));
+        assert!(matches!(&decls[2], ParsedDecl::Def { .. }));
     }
 }
