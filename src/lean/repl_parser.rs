@@ -319,6 +319,10 @@ pub enum ParsedDecl {
     End {
         name: Option<String>,
     },
+    /// Import declaration: import another .lean file
+    Import {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -444,6 +448,8 @@ impl Parser {
             self.parse_section_decl()
         } else if self.starts_with_keyword("end") {
             self.parse_end_decl()
+        } else if self.starts_with_keyword("import") {
+            self.parse_import_decl()
         } else {
             Err(format!("Expected declaration, got {:?}", self.peek()))
         }
@@ -616,6 +622,15 @@ impl Parser {
         };
 
         Ok(ParsedDecl::End { name })
+    }
+
+    fn parse_import_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(6); // consume "import"
+        self.skip_whitespace();
+
+        let path = self.parse_ident_raw()?;
+
+        Ok(ParsedDecl::Import { path })
     }
 
     fn parse_axiom_decl(&mut self) -> Result<ParsedDecl, String> {

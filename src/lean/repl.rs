@@ -4,7 +4,7 @@ use super::expr::*;
 use super::repl_parser::{ParsedDecl, ParsedExpr, Parser as ReplParser};
 use super::tactic::TacticEngine;
 use super::type_checker::{TypeChecker, TypeCheckerState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::rc::Rc;
@@ -37,6 +37,8 @@ pub struct Repl {
     infix_ops: HashMap<String, (i32, String, bool)>,
     /// Stack of section scopes for restoring state on end
     section_stack: Vec<SectionScope>,
+    /// Track files loaded in the current session to avoid duplicate imports
+    loaded_files: HashSet<String>,
 }
 
 /// Scope snapshot for section/end
@@ -135,6 +137,7 @@ impl Repl {
             file_variables: Vec::new(),
             infix_ops: HashMap::new(),
             section_stack: Vec::new(),
+            loaded_files: HashSet::new(),
         };
         repl.load_quot();
         repl
@@ -349,6 +352,53 @@ impl Repl {
         Ok(())
     }
 
+    fn process_import(&mut self, path: String) -> Result<(), String> {
+        let filepath = format!("{}.lean", path);
+
+        // Avoid loading the same file twice in one session
+        if self.loaded_files.contains(&filepath) {
+            if !self.quiet {
+                println!("  Import: {} (already loaded)", filepath);
+            }
+            return Ok(());
+        }
+        self.loaded_files.insert(filepath.clone());
+
+        // Save current file-scoped state
+        let saved_variables = self.file_variables.clone();
+        let saved_infix = self.infix_ops.clone();
+        let saved_stack = self.section_stack.clone();
+
+        // Clear file-scoped state for the imported file
+        self.file_variables.clear();
+        self.infix_ops.clear();
+        self.section_stack.clear();
+
+        let result = (|| {
+            let contents = fs::read_to_string(&filepath)
+                .map_err(|e| format!("Cannot import '{}': {}", filepath, e))?;
+            let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
+            let decls = parser.parse_file()
+                .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
+
+            let count = decls.len();
+            for decl in decls {
+                self.process_decl(decl)?;
+            }
+            if !self.quiet {
+                println!("  Import: {} ({} declarations)", filepath, count);
+            }
+            Ok(())
+        })();
+
+        // Restore file-scoped state (imports don't leak local variables/notations)
+        self.file_variables = saved_variables;
+        self.infix_ops = saved_infix;
+        self.section_stack = saved_stack;
+
+        result
+    }
+
     fn process_decl(&mut self, decl: ParsedDecl) -> Result<(), String> {
         match decl {
             ParsedDecl::Axiom { name, ty } => {
@@ -425,6 +475,9 @@ impl Repl {
                     }
                 }
                 Ok(())
+            }
+            ParsedDecl::Import { path } => {
+                self.process_import(path)
             }
             ParsedDecl::Inductive { name, ty, ctors, num_params } => {
                 let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
