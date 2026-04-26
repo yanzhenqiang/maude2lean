@@ -311,6 +311,14 @@ pub enum ParsedDecl {
         precedence: i32,
         left_assoc: bool,
     },
+    /// Section declaration: opens a new scope for variables and notations
+    Section {
+        name: Option<String>,
+    },
+    /// End declaration: closes the current section
+    End {
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -432,6 +440,10 @@ impl Parser {
             self.parse_infix_decl(true)
         } else if self.starts_with_keyword("infix") {
             self.parse_infix_decl(false)
+        } else if self.starts_with_keyword("section") {
+            self.parse_section_decl()
+        } else if self.starts_with_keyword("end") {
+            self.parse_end_decl()
         } else {
             Err(format!("Expected declaration, got {:?}", self.peek()))
         }
@@ -576,6 +588,34 @@ impl Parser {
         self.infix_ops.insert(symbol.clone(), (precedence, func_name.clone(), left_assoc));
 
         Ok(ParsedDecl::Infix { symbol, func_name, precedence, left_assoc })
+    }
+
+    fn parse_section_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(7); // consume "section"
+        self.skip_whitespace();
+
+        // Optional section name
+        let name = if self.peek().map_or(false, |c| c.is_alphabetic() || c == '_') {
+            Some(self.parse_ident_raw()?)
+        } else {
+            None
+        };
+
+        Ok(ParsedDecl::Section { name })
+    }
+
+    fn parse_end_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(3); // consume "end"
+        self.skip_whitespace();
+
+        // Optional section name
+        let name = if self.peek().map_or(false, |c| c.is_alphabetic() || c == '_') {
+            Some(self.parse_ident_raw()?)
+        } else {
+            None
+        };
+
+        Ok(ParsedDecl::End { name })
     }
 
     fn parse_axiom_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -1140,7 +1180,7 @@ impl Parser {
                 || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
                 || self.starts_with_keyword("if") || self.starts_with_keyword("then") || self.starts_with_keyword("else")
-                || self.starts_with_keyword("end") {
+                || self.starts_with_keyword("section") || self.starts_with_keyword("end") {
                 break;
             }
             atoms.push(self.parse_atom()?);

@@ -35,6 +35,15 @@ pub struct Repl {
     file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
     /// User-defined infix operators persisted across files and REPL sessions
     infix_ops: HashMap<String, (i32, String, bool)>,
+    /// Stack of section scopes for restoring state on end
+    section_stack: Vec<SectionScope>,
+}
+
+/// Scope snapshot for section/end
+#[derive(Debug, Clone)]
+struct SectionScope {
+    file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
+    infix_ops: HashMap<String, (i32, String, bool)>,
 }
 
 /// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
@@ -125,6 +134,7 @@ impl Repl {
             quiet: false,
             file_variables: Vec::new(),
             infix_ops: HashMap::new(),
+            section_stack: Vec::new(),
         };
         repl.load_quot();
         repl
@@ -186,8 +196,10 @@ impl Repl {
 
     pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
         for filepath in files {
-            // Clear file-scoped variables for each new file
+            // Clear file-scoped state for each new file
             self.file_variables.clear();
+            self.infix_ops.clear();
+            self.section_stack.clear();
             let contents = fs::read_to_string(filepath)
                 .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
             let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
@@ -317,8 +329,10 @@ impl Repl {
     }
 
     fn handle_load(&mut self, filepath: &str) -> Result<(), String> {
-        // Clear file-scoped variables when loading a new file
+        // Clear file-scoped state when loading a new file
         self.file_variables.clear();
+        self.infix_ops.clear();
+        self.section_stack.clear();
         let contents = fs::read_to_string(filepath)
             .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
         let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
@@ -381,6 +395,34 @@ impl Repl {
                 self.infix_ops.insert(symbol.clone(), (precedence, func_name.clone(), left_assoc));
                 if !self.quiet {
                     println!("  Infix: {} => {}", symbol, func_name);
+                }
+                Ok(())
+            }
+            ParsedDecl::Section { name } => {
+                self.section_stack.push(SectionScope {
+                    file_variables: self.file_variables.clone(),
+                    infix_ops: self.infix_ops.clone(),
+                });
+                if !self.quiet {
+                    if let Some(n) = name {
+                        println!("  Section: {}", n);
+                    } else {
+                        println!("  Section");
+                    }
+                }
+                Ok(())
+            }
+            ParsedDecl::End { name } => {
+                let scope = self.section_stack.pop()
+                    .ok_or("end without matching section")?;
+                self.file_variables = scope.file_variables;
+                self.infix_ops = scope.infix_ops;
+                if !self.quiet {
+                    if let Some(n) = name {
+                        println!("  End: {}", n);
+                    } else {
+                        println!("  End");
+                    }
                 }
                 Ok(())
             }
