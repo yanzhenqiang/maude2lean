@@ -317,6 +317,18 @@ impl Parser {
     }
 
     /// Parse a single expression.
+    /// Find the start position of the current line (position after last '\n' or 0)
+    fn line_start(&self, pos: usize) -> usize {
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            if self.input.get(i) == Some(&'\n') {
+                return i + 1;
+            }
+        }
+        0
+    }
+
     pub fn parse_expr(&mut self) -> Result<ParsedExpr, String> {
         self.parse_pi_or_arrow()
     }
@@ -1189,11 +1201,31 @@ impl Parser {
 
         // Parse branches: | pat => expr | pat => expr
         let mut branches = Vec::new();
+        let mut first_pipe_line: Option<usize> = None;
+        let mut first_pipe_col: Option<usize> = None;
+        let mut last_pipe_line: Option<usize> = None;
         loop {
             self.skip_whitespace();
             if self.peek() != Some('|') {
                 break;
             }
+            let pipe_line = self.line_start(self.pos);
+            let pipe_col = self.pos - pipe_line;
+            match (first_pipe_line, first_pipe_col) {
+                (Some(line), Some(col)) => {
+                    // Same line as first pipe: always accept
+                    // Same line as previous pipe: always accept (chained on one line)
+                    // Different line: must have same column as first pipe
+                    if pipe_line != line && Some(pipe_line) != last_pipe_line && pipe_col != col {
+                        break;
+                    }
+                }
+                _ => {
+                    first_pipe_line = Some(pipe_line);
+                    first_pipe_col = Some(pipe_col);
+                }
+            }
+            last_pipe_line = Some(pipe_line);
             self.advance(); // consume '|'
             self.skip_whitespace();
 
