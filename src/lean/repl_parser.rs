@@ -323,6 +323,11 @@ pub enum ParsedDecl {
     Import {
         path: String,
     },
+    /// Notation declaration: notation "symbol" => expr
+    Notation {
+        symbol: String,
+        expansion: ParsedExpr,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +336,8 @@ pub struct Parser {
     pos: usize,
     /// User-defined infix operators: symbol -> (precedence, function_name, left_assoc)
     infix_ops: HashMap<String, (i32, String, bool)>,
+    /// User-defined notations: symbol -> expansion expression
+    notations: HashMap<String, ParsedExpr>,
 }
 
 impl Parser {
@@ -339,6 +346,7 @@ impl Parser {
             input: input.chars().collect(),
             pos: 0,
             infix_ops: HashMap::new(),
+            notations: HashMap::new(),
         }
     }
 
@@ -347,6 +355,16 @@ impl Parser {
             input: input.chars().collect(),
             pos: 0,
             infix_ops,
+            notations: HashMap::new(),
+        }
+    }
+
+    pub fn new_with_state(input: &str, infix_ops: HashMap<String, (i32, String, bool)>, notations: HashMap<String, ParsedExpr>) -> Self {
+        Parser {
+            input: input.chars().collect(),
+            pos: 0,
+            infix_ops,
+            notations,
         }
     }
 
@@ -440,6 +458,8 @@ impl Parser {
             self.parse_solve_decl()
         } else if self.starts_with_keyword("variable") {
             self.parse_variable_decl()
+        } else if self.starts_with_keyword("notation") {
+            self.parse_notation_decl()
         } else if self.starts_with_keyword("infixl") {
             self.parse_infix_decl(true)
         } else if self.starts_with_keyword("infix") {
@@ -594,6 +614,48 @@ impl Parser {
         self.infix_ops.insert(symbol.clone(), (precedence, func_name.clone(), left_assoc));
 
         Ok(ParsedDecl::Infix { symbol, func_name, precedence, left_assoc })
+    }
+
+    fn parse_notation_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(8); // consume "notation"
+        self.skip_whitespace();
+
+        // Parse notation symbol (quoted string)
+        let symbol = if self.peek() == Some('"') {
+            self.advance(); // consume '"'
+            let mut s = String::new();
+            while let Some(c) = self.peek() {
+                if c == '"' {
+                    self.advance();
+                    break;
+                }
+                s.push(c);
+                self.advance();
+            }
+            s
+        } else {
+            return Err("Expected quoted string after notation".to_string());
+        };
+
+        if symbol.is_empty() {
+            return Err("Empty notation symbol".to_string());
+        }
+
+        self.skip_whitespace();
+
+        // Expect "=>" followed by expansion expression
+        if !self.starts_with_keyword("=>") {
+            return Err("Expected '=>' after notation symbol".to_string());
+        }
+        self.advance_by(2);
+        self.skip_whitespace();
+
+        let expansion = self.parse_expr()?;
+
+        // Register notation in parser
+        self.notations.insert(symbol.clone(), expansion.clone());
+
+        Ok(ParsedDecl::Notation { symbol, expansion })
     }
 
     fn parse_section_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -1193,6 +1255,7 @@ impl Parser {
                 || self.starts_with_keyword("inductive") || self.starts_with_keyword("structure") || self.starts_with_keyword("axiom")
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
                 || self.starts_with_keyword("solve")
+                || self.starts_with_keyword("notation")
                 || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
                 || self.starts_with_keyword("if") || self.starts_with_keyword("then") || self.starts_with_keyword("else")
                 || self.starts_with_keyword("section") || self.starts_with_keyword("end")
@@ -1254,6 +1317,10 @@ impl Parser {
                     self.advance_by(4);
                     Ok(ParsedExpr::Sort(0))
                 } else {
+                    // Check for nullary notation: identifier matches a notation symbol
+                    if let Some(notation) = self.match_notation() {
+                        return Ok(notation);
+                    }
                     self.parse_ident_or_bvar()
                 }
             }
@@ -1668,9 +1735,35 @@ impl Parser {
         }
     }
 
+    /// Check if the current position matches a nullary notation symbol.
+    /// If so, advance past it and return the expansion expression.
+    fn match_notation(&mut self) -> Option<ParsedExpr> {
+        self.skip_whitespace();
+        // Collect notation entries to avoid borrow issues
+        let notations: Vec<(String, ParsedExpr)> = self.notations.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (symbol, expansion) in notations {
+            let symbol_chars: Vec<char> = symbol.chars().collect();
+            let symbol_len = symbol_chars.len();
+            if self.input.get(self.pos..self.pos + symbol_len) == Some(symbol_chars.as_slice()) {
+                // Make sure it's not a prefix of a longer identifier
+                let next_char = self.input.get(self.pos + symbol_len);
+                if let Some(nc) = next_char {
+                    if nc.is_alphanumeric() || *nc == '_' || *nc == '\'' {
+                        continue;
+                    }
+                }
+                self.advance_by(symbol_len);
+                return Some(expansion);
+            }
+        }
+        None
+    }
+
     fn starts_with_keyword(&self, kw: &str) -> bool {
         let saved = self.pos;
-        let mut tmp = Parser { input: self.input.clone(), pos: saved, infix_ops: self.infix_ops.clone() };
+        let mut tmp = Parser { input: self.input.clone(), pos: saved, infix_ops: self.infix_ops.clone(), notations: self.notations.clone() };
         tmp.skip_whitespace();
         for expected in kw.chars() {
             if let Some(c) = tmp.peek() {
@@ -2021,5 +2114,38 @@ mod tests {
         assert!(matches!(&decls[0], ParsedDecl::Inductive { .. }));
         assert!(matches!(&decls[1], ParsedDecl::Variable { .. }));
         assert!(matches!(&decls[2], ParsedDecl::Def { .. }));
+    }
+
+    #[test]
+    fn test_parse_notation_decl() {
+        let src = "notation \"NatAlias\" => Nat\n";
+        let mut p = Parser::new(src);
+        let decls = p.parse_file().unwrap();
+        assert_eq!(decls.len(), 1);
+        match &decls[0] {
+            ParsedDecl::Notation { symbol, expansion } => {
+                assert_eq!(symbol, "NatAlias");
+                assert!(matches!(expansion, ParsedExpr::Const(name) if name == "Nat"));
+            }
+            _ => panic!("Expected Notation decl, got {:?}", decls[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_notation_usage() {
+        let src = "inductive Nat where\n| zero : Nat\n\nnotation \"NatAlias\" => Nat\n\ndef test1 : NatAlias := zero\n";
+        let mut p = Parser::new(src);
+        match p.parse_file() {
+            Ok(decls) => {
+                assert_eq!(decls.len(), 3);
+                assert!(matches!(&decls[0], ParsedDecl::Inductive { .. }));
+                assert!(matches!(&decls[1], ParsedDecl::Notation { .. }));
+                assert!(matches!(&decls[2], ParsedDecl::Def { .. }));
+            }
+            Err(e) => {
+                let rem: String = p.input[p.pos..].iter().collect();
+                panic!("Parse error: {} at pos={} rem={:?}", e, p.pos, rem);
+            }
+        }
     }
 }

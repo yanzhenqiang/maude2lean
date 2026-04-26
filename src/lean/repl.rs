@@ -35,6 +35,8 @@ pub struct Repl {
     file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
     /// User-defined infix operators persisted across files and REPL sessions
     infix_ops: HashMap<String, (i32, String, bool)>,
+    /// User-defined notations: symbol -> expansion expression
+    notations: HashMap<String, super::repl_parser::ParsedExpr>,
     /// Stack of section scopes for restoring state on end
     section_stack: Vec<SectionScope>,
     /// Track files loaded in the current session to avoid duplicate imports
@@ -46,6 +48,7 @@ pub struct Repl {
 struct SectionScope {
     file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
     infix_ops: HashMap<String, (i32, String, bool)>,
+    notations: HashMap<String, super::repl_parser::ParsedExpr>,
 }
 
 /// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
@@ -136,6 +139,7 @@ impl Repl {
             quiet: false,
             file_variables: Vec::new(),
             infix_ops: HashMap::new(),
+            notations: HashMap::new(),
             section_stack: Vec::new(),
             loaded_files: HashSet::new(),
         };
@@ -202,10 +206,11 @@ impl Repl {
             // Clear file-scoped state for each new file
             self.file_variables.clear();
             self.infix_ops.clear();
+            self.notations.clear();
             self.section_stack.clear();
             let contents = fs::read_to_string(filepath)
                 .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
-            let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
+            let mut parser = ReplParser::new_with_state(&contents, self.infix_ops.clone(), self.notations.clone());
             let decls = parser.parse_file()
                 .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
 
@@ -326,7 +331,7 @@ impl Repl {
     }
 
     fn parse_and_convert(&self, input: &str) -> Result<Expr, String> {
-        let mut parser = ReplParser::new_with_infix_ops(input, self.infix_ops.clone());
+        let mut parser = ReplParser::new_with_state(input, self.infix_ops.clone(), self.notations.clone());
         let parsed = parser.parse_expr()?;
         Ok(parsed.to_expr(&self.env_bindings, &self.env, &mut Vec::new()))
     }
@@ -335,10 +340,11 @@ impl Repl {
         // Clear file-scoped state when loading a new file
         self.file_variables.clear();
         self.infix_ops.clear();
+        self.notations.clear();
         self.section_stack.clear();
         let contents = fs::read_to_string(filepath)
             .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
-        let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
+        let mut parser = ReplParser::new_with_state(&contents, self.infix_ops.clone(), self.notations.clone());
         let decls = parser.parse_file()
             .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
 
@@ -367,17 +373,19 @@ impl Repl {
         // Save current file-scoped state
         let saved_variables = self.file_variables.clone();
         let saved_infix = self.infix_ops.clone();
+        let saved_notations = self.notations.clone();
         let saved_stack = self.section_stack.clone();
 
         // Clear file-scoped state for the imported file
         self.file_variables.clear();
         self.infix_ops.clear();
+        self.notations.clear();
         self.section_stack.clear();
 
         let result = (|| {
             let contents = fs::read_to_string(&filepath)
                 .map_err(|e| format!("Cannot import '{}': {}", filepath, e))?;
-            let mut parser = ReplParser::new_with_infix_ops(&contents, self.infix_ops.clone());
+            let mut parser = ReplParser::new_with_state(&contents, self.infix_ops.clone(), self.notations.clone());
             let decls = parser.parse_file()
                 .map_err(|e| format!("Parse error in '{}': {}", filepath, e))?;
 
@@ -394,6 +402,7 @@ impl Repl {
         // Restore file-scoped state (imports don't leak local variables/notations)
         self.file_variables = saved_variables;
         self.infix_ops = saved_infix;
+        self.notations = saved_notations;
         self.section_stack = saved_stack;
 
         result
@@ -448,10 +457,18 @@ impl Repl {
                 }
                 Ok(())
             }
+            ParsedDecl::Notation { symbol, expansion } => {
+                self.notations.insert(symbol.clone(), expansion.clone());
+                if !self.quiet {
+                    println!("  Notation: {} => {:?}", symbol, expansion);
+                }
+                Ok(())
+            }
             ParsedDecl::Section { name } => {
                 self.section_stack.push(SectionScope {
                     file_variables: self.file_variables.clone(),
                     infix_ops: self.infix_ops.clone(),
+                    notations: self.notations.clone(),
                 });
                 if !self.quiet {
                     if let Some(n) = name {
@@ -467,6 +484,7 @@ impl Repl {
                     .ok_or("end without matching section")?;
                 self.file_variables = scope.file_variables;
                 self.infix_ops = scope.infix_ops;
+                self.notations = scope.notations;
                 if !self.quiet {
                     if let Some(n) = name {
                         println!("  End: {}", n);
@@ -811,7 +829,7 @@ impl Repl {
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
 
                 for tactic_cmd in tactics {
-                    execute_tactic(env, env_bindings, &self.infix_ops, &mut engine, tactic_cmd)?;
+                    execute_tactic(env, env_bindings, &self.infix_ops, &self.notations, &mut engine, tactic_cmd)?;
                 }
 
                 if engine.num_goals() > 0 {
@@ -952,7 +970,7 @@ impl Repl {
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
 
                 for tactic_cmd in tactics {
-                    execute_tactic(env, env_bindings, &self.infix_ops, &mut engine, tactic_cmd)?;
+                    execute_tactic(env, env_bindings, &self.infix_ops, &self.notations, &mut engine, tactic_cmd)?;
                 }
 
                 if engine.num_goals() > 0 {
@@ -1418,8 +1436,8 @@ impl Repl {
 }
 
 /// Parse an expression for tactic use (standalone to avoid borrow conflicts)
-fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, infix_ops: &HashMap<String, (i32, String, bool)>, input: &str) -> Result<Expr, String> {
-    let mut parser = ReplParser::new_with_infix_ops(input, infix_ops.clone());
+fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, infix_ops: &HashMap<String, (i32, String, bool)>, notations: &HashMap<String, super::repl_parser::ParsedExpr>, input: &str) -> Result<Expr, String> {
+    let mut parser = ReplParser::new_with_state(input, infix_ops.clone(), notations.clone());
     let parsed = parser.parse_expr().map_err(|e| format!("parse error: {}", e))?;
     Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
 }
@@ -1466,6 +1484,7 @@ fn execute_tactic(
     env: &Environment,
     env_bindings: &HashMap<String, Expr>,
     infix_ops: &HashMap<String, (i32, String, bool)>,
+    notations: &HashMap<String, super::repl_parser::ParsedExpr>,
     engine: &mut TacticEngine,
     cmd: &str,
 ) -> Result<(), String> {
@@ -1493,7 +1512,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("exact requires an expression".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_exact(&expr)
         }
@@ -1501,7 +1520,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("apply requires an expression".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_apply(&expr)
         }
@@ -1515,7 +1534,7 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("rewrite requires an equality hypothesis".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, infix_ops, rest)?;
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, rest)?;
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_rewrite(&expr)
         }
@@ -1550,9 +1569,9 @@ fn execute_tactic(
             let ty_str = after_colon[..assign_pos].trim();
             let proof_str = after_colon[assign_pos + 2..].trim();
 
-            let ty = parse_tactic_expr(env_bindings, env, infix_ops, ty_str)?;
+            let ty = parse_tactic_expr(env_bindings, env, infix_ops, notations, ty_str)?;
             let ty = resolve_tactic_vars(&ty, engine);
-            let proof = parse_tactic_expr(env_bindings, env, infix_ops, proof_str)?;
+            let proof = parse_tactic_expr(env_bindings, env, infix_ops, notations, proof_str)?;
             let proof = resolve_tactic_vars(&proof, engine);
             engine.tactic_have(&name, &ty, &proof)
         }
