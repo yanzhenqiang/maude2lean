@@ -498,10 +498,17 @@ impl Repl {
                 self.process_import(path)
             }
             ParsedDecl::Inductive { name, ty, ctors, num_params } => {
-                let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                // Prepend file-scoped variables as inductive parameters
+                let wrapped_ty = self.wrap_with_file_variables(ty);
+                let wrapped_ctors: Vec<(String, super::repl_parser::ParsedExpr)> = ctors.into_iter()
+                    .map(|(n, t)| (n, self.wrap_with_file_variables(t)))
+                    .collect();
+                let total_params = num_params + self.file_variables.len();
+
+                let ty_expr = wrapped_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
                 let ind_name = Name::new(&name);
                 let mut ctor_exprs = Vec::new();
-                for (ctor_name, ctor_ty) in &ctors {
+                for (ctor_name, ctor_ty) in &wrapped_ctors {
                     let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
                     ctor_exprs.push(Constructor {
                         name: Name::new(ctor_name),
@@ -555,7 +562,7 @@ impl Repl {
 
                     let decl = Declaration::Inductive {
                         level_params: vec![],
-                        num_params: num_params as u64,
+                        num_params: total_params as u64,
                         types: all_types,
                         is_unsafe: false,
                     };
@@ -591,7 +598,7 @@ impl Repl {
 
                 let decl = Declaration::Inductive {
                     level_params: vec![],
-                    num_params: num_params as u64,
+                    num_params: total_params as u64,
                     types: vec![ind],
                     is_unsafe: false,
                 };
@@ -622,9 +629,13 @@ impl Repl {
             ParsedDecl::MutualInductive { types } => {
                 let mut inductive_types = Vec::new();
                 for (name, ty, ctors, _num_params) in &types {
-                    let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                    let wrapped_ty = self.wrap_with_file_variables(ty.clone());
+                    let wrapped_ctors: Vec<_> = ctors.iter()
+                        .map(|(n, t)| (n.clone(), self.wrap_with_file_variables(t.clone())))
+                        .collect();
+                    let ty_expr = wrapped_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
                     let mut ctor_exprs = Vec::new();
-                    for (ctor_name, ctor_ty) in ctors {
+                    for (ctor_name, ctor_ty) in &wrapped_ctors {
                         let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
                         // Use fully-qualified constructor names: Even.zero, Odd.succ, etc.
                         let full_ctor_name = Name::new(name).extend(ctor_name);
@@ -641,7 +652,8 @@ impl Repl {
                 }
 
                 // All types in the mutual block share the same num_params (use max for safety)
-                let max_params = types.iter().map(|(_, _, _, np)| *np).max().unwrap_or(0) as u64;
+                let max_params = types.iter().map(|(_, _, _, np)| *np).max().unwrap_or(0) as u64
+                    + self.file_variables.len() as u64;
 
                 let decl = Declaration::Inductive {
                     level_params: vec![],
@@ -788,6 +800,16 @@ impl Repl {
                 Ok(())
             }
         }
+    }
+
+    /// Wrap a parsed expression with Pi binders for all file-scoped variables.
+    /// Used to prepend variable parameters to inductive types and constructors.
+    fn wrap_with_file_variables(&self, expr: super::repl_parser::ParsedExpr) -> super::repl_parser::ParsedExpr {
+        let mut result = expr;
+        for (pname, pty) in self.file_variables.iter().rev() {
+            result = super::repl_parser::ParsedExpr::Pi(pname.clone(), Box::new(pty.clone()), Box::new(result));
+        }
+        result
     }
 
     fn process_def_or_theorem(
@@ -944,10 +966,14 @@ impl Repl {
         ret_ty: super::repl_parser::ParsedExpr,
         value: super::repl_parser::ParsedExpr,
     ) -> Result<(), String> {
+        // Prepend file-scoped variables to params
+        let mut all_params = self.file_variables.clone();
+        all_params.extend(params);
+
         // Convert parameter types
         let mut param_exprs: Vec<(String, Expr)> = Vec::new();
         let mut bound_vars: Vec<String> = Vec::new();
-        for (pname, pty) in &params {
+        for (pname, pty) in &all_params {
             let ty_expr = pty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
             param_exprs.push((pname.clone(), ty_expr));
             bound_vars.push(pname.clone());
