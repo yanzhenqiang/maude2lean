@@ -31,6 +31,8 @@ pub struct Repl {
     /// Mapping from user-defined names to their Expr representations
     env_bindings: HashMap<String, Expr>,
     quiet: bool,
+    /// Variables declared at file scope, implicitly added to subsequent def/theorem params
+    file_variables: Vec<(String, super::repl_parser::ParsedExpr)>,
 }
 
 /// Represents a nested occurrence: `App(...App(Const(outer_name), args)...)` where the
@@ -119,6 +121,7 @@ impl Repl {
             tc_state,
             env_bindings: HashMap::new(),
             quiet: false,
+            file_variables: Vec::new(),
         };
         repl.load_quot();
         repl
@@ -180,6 +183,8 @@ impl Repl {
 
     pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
         for filepath in files {
+            // Clear file-scoped variables for each new file
+            self.file_variables.clear();
             let contents = fs::read_to_string(filepath)
                 .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
             let mut parser = ReplParser::new(&contents);
@@ -309,6 +314,8 @@ impl Repl {
     }
 
     fn handle_load(&mut self, filepath: &str) -> Result<(), String> {
+        // Clear file-scoped variables when loading a new file
+        self.file_variables.clear();
         let contents = fs::read_to_string(filepath)
             .map_err(|e| format!("Cannot read file '{}': {}", filepath, e))?;
         let mut parser = ReplParser::new(&contents);
@@ -353,6 +360,25 @@ impl Repl {
             }
             ParsedDecl::Solve { name, params, ret_ty, value } => {
                 self.process_solve(name, params, ret_ty, value)
+            }
+            ParsedDecl::Variable { params } => {
+                for (name, pty) in params {
+                    self.file_variables.push((name, pty));
+                }
+                if !self.quiet {
+                    let vars = self.file_variables.iter()
+                        .map(|(n, _)| n.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("  Variables: {}", vars);
+                }
+                Ok(())
+            }
+            ParsedDecl::Infix { symbol, func_name, precedence: _, left_assoc: _ } => {
+                if !self.quiet {
+                    println!("  Infix: {} => {}", symbol, func_name);
+                }
+                Ok(())
             }
             ParsedDecl::Inductive { name, ty, ctors, num_params } => {
                 let ty_expr = ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
@@ -655,10 +681,14 @@ impl Repl {
         value: super::repl_parser::ParsedExpr,
         is_theorem: bool,
     ) -> Result<(), String> {
+        // Prepend file-scoped variables to params
+        let mut all_params = self.file_variables.clone();
+        all_params.extend(params);
+
         // Convert parameter types, accumulating bound_vars so later params can reference earlier ones
         let mut param_exprs: Vec<(String, Expr)> = Vec::new();
         let mut bound_vars: Vec<String> = Vec::new();
-        for (pname, pty) in &params {
+        for (pname, pty) in &all_params {
             let ty_expr = pty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
             param_exprs.push((pname.clone(), ty_expr));
             bound_vars.push(pname.clone());

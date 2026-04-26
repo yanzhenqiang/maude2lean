@@ -300,12 +300,25 @@ pub enum ParsedDecl {
         ret_ty: ParsedExpr,
         value: ParsedExpr,
     },
+    /// Variable declaration: parameters that are implicitly added to all subsequent defs/theorems
+    Variable {
+        params: Vec<(String, ParsedExpr)>,
+    },
+    /// Infix operator declaration: infix "+" => add
+    Infix {
+        symbol: String,
+        func_name: String,
+        precedence: i32,
+        left_assoc: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub struct Parser {
     input: Vec<char>,
     pos: usize,
+    /// User-defined infix operators: symbol -> (precedence, function_name, left_assoc)
+    infix_ops: HashMap<String, (i32, String, bool)>,
 }
 
 impl Parser {
@@ -313,6 +326,7 @@ impl Parser {
         Parser {
             input: input.chars().collect(),
             pos: 0,
+            infix_ops: HashMap::new(),
         }
     }
 
@@ -404,6 +418,12 @@ impl Parser {
             self.parse_mutual_inductive_decl()
         } else if self.starts_with_keyword("solve") {
             self.parse_solve_decl()
+        } else if self.starts_with_keyword("variable") {
+            self.parse_variable_decl()
+        } else if self.starts_with_keyword("infixl") {
+            self.parse_infix_decl(true)
+        } else if self.starts_with_keyword("infix") {
+            self.parse_infix_decl(false)
         } else {
             Err(format!("Expected declaration, got {:?}", self.peek()))
         }
@@ -439,6 +459,115 @@ impl Parser {
         let (params, ret_ty, value) = self.parse_decl_body()?;
         let ret_ty = ret_ty.ok_or("Solve must have an explicit return type".to_string())?;
         Ok(ParsedDecl::Solve { name, params, ret_ty, value })
+    }
+
+    fn parse_variable_decl(&mut self) -> Result<ParsedDecl, String> {
+        self.advance_by(8); // consume "variable"
+        self.skip_whitespace();
+
+        let mut params = Vec::new();
+        while self.peek() == Some('(') || self.peek() == Some('{') {
+            let implicit = self.peek() == Some('{');
+            self.advance();
+            let mut names = vec![self.parse_ident_raw()?];
+            self.skip_whitespace();
+            while self.peek() != Some(':') {
+                names.push(self.parse_ident_raw()?);
+                self.skip_whitespace();
+            }
+            self.advance(); // consume ':'
+            let pty = self.parse_pi_or_arrow()?;
+            self.skip_whitespace();
+            let close = if implicit { '}' } else { ')' };
+            if self.peek() != Some(close) {
+                return Err(format!("Expected '{}'", close));
+            }
+            self.advance();
+            for name in names {
+                params.push((name, pty.clone()));
+            }
+            self.skip_whitespace();
+        }
+
+        if params.is_empty() {
+            return Err("variable declaration must have at least one parameter".to_string());
+        }
+
+        Ok(ParsedDecl::Variable { params })
+    }
+
+    fn parse_infix_decl(&mut self, left_assoc: bool) -> Result<ParsedDecl, String> {
+        let kw_len = if left_assoc { 6 } else { 5 }; // "infixl" or "infix"
+        self.advance_by(kw_len);
+        self.skip_whitespace();
+
+        // Parse operator symbol (quoted string)
+        let symbol = if self.peek() == Some('"') {
+            self.advance(); // consume '"'
+            let mut s = String::new();
+            while let Some(c) = self.peek() {
+                if c == '"' {
+                    self.advance();
+                    break;
+                }
+                s.push(c);
+                self.advance();
+            }
+            s
+        } else {
+            // Also allow bare symbols like +, -, <=
+            let mut s = String::new();
+            while let Some(c) = self.peek() {
+                if c.is_whitespace() || c == '=' || c == '>' || c == '(' || c == ')' || c == '{' || c == '}' {
+                    break;
+                }
+                s.push(c);
+                self.advance();
+            }
+            s
+        };
+
+        if symbol.is_empty() {
+            return Err("Expected operator symbol after infix".to_string());
+        }
+
+        self.skip_whitespace();
+
+        // Optional precedence: infix "+" 6 => add
+        let precedence = if let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                let mut prec_str = String::new();
+                while let Some(d) = self.peek() {
+                    if d.is_ascii_digit() {
+                        prec_str.push(d);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                prec_str.parse().unwrap_or(6)
+            } else {
+                6
+            }
+        } else {
+            6
+        };
+
+        self.skip_whitespace();
+
+        // Expect "=>" followed by function name
+        if !self.starts_with_keyword("=>") {
+            return Err("Expected '=>' after infix operator symbol".to_string());
+        }
+        self.advance_by(2);
+        self.skip_whitespace();
+
+        let func_name = self.parse_ident_raw()?;
+
+        // Register in parser so subsequent expressions can use it
+        self.infix_ops.insert(symbol.clone(), (precedence, func_name.clone(), left_assoc));
+
+        Ok(ParsedDecl::Infix { symbol, func_name, precedence, left_assoc })
     }
 
     fn parse_axiom_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -913,22 +1042,45 @@ impl Parser {
     }
 
     /// Parse infix operators (+, -, *) with precedence climbing.
+    /// Supports both hardcoded operators and user-defined infix declarations.
     fn parse_infix(&mut self, min_prec: i32) -> Result<ParsedExpr, String> {
         let mut left = self.parse_app_or_atom()?;
         loop {
             self.skip_whitespace_and_comments();
 
             // Determine operator and precedence
-            let (op, prec) = if self.peek() == Some('+') {
-                ("+", 6)
+            // First check user-defined infix operators (they override hardcoded ones)
+            let user_op = {
+                let mut matched_op: Option<(String, i32, bool, String)> = None;
+                for (sym, (prec, func, left_assoc)) in &self.infix_ops {
+                    if self.input.get(self.pos..self.pos + sym.len()) == Some(sym.chars().collect::<Vec<_>>().as_slice()) {
+                        let next_char = self.input.get(self.pos + sym.len());
+                        // Make sure it's not a prefix of a longer identifier/operator
+                        if let Some(nc) = next_char {
+                            if nc.is_alphanumeric() || *nc == '_' || *nc == '\'' {
+                                continue;
+                            }
+                        }
+                        if matched_op.is_none() || sym.len() > matched_op.as_ref().unwrap().0.len() {
+                            matched_op = Some((sym.clone(), *prec, *left_assoc, func.clone()));
+                        }
+                    }
+                }
+                matched_op
+            };
+
+            let (op, prec, left_assoc, func_name) = if let Some(u) = user_op {
+                u
+            } else if self.peek() == Some('+') {
+                ("+".to_string(), 6, true, "add".to_string())
             } else if self.peek() == Some('-') {
                 // Distinguish from arrow ->
                 if self.input.get(self.pos + 1) == Some(&'>') {
                     break;
                 }
-                ("-", 6)
+                ("-".to_string(), 6, true, "sub".to_string())
             } else if self.peek() == Some('*') {
-                ("*", 7)
+                ("*".to_string(), 7, true, "mul".to_string())
             } else {
                 break;
             };
@@ -937,22 +1089,16 @@ impl Parser {
                 break;
             }
 
-            self.advance(); // consume operator
+            self.advance_by(op.len()); // consume operator
 
             // Left-associative: right side needs higher precedence
-            let right = self.parse_infix(prec + 1)?;
-
-            // Desugar a + b to add a b
-            let op_name = match op {
-                "+" => "add",
-                "-" => "sub",
-                "*" => "mul",
-                _ => op,
-            };
+            // Right-associative: right side needs same or higher precedence
+            let next_min_prec = if left_assoc { prec + 1 } else { prec };
+            let right = self.parse_infix(next_min_prec)?;
 
             left = ParsedExpr::App(
                 Box::new(ParsedExpr::App(
-                    Box::new(ParsedExpr::Const(op_name.to_string())),
+                    Box::new(ParsedExpr::Const(func_name)),
                     Box::new(left),
                 )),
                 Box::new(right),
@@ -980,6 +1126,7 @@ impl Parser {
                 || self.starts_with_keyword("inductive") || self.starts_with_keyword("structure") || self.starts_with_keyword("axiom")
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
                 || self.starts_with_keyword("solve")
+                || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
                 || self.starts_with_keyword("end") {
                 break;
             }
@@ -1410,7 +1557,7 @@ impl Parser {
 
     fn starts_with_keyword(&self, kw: &str) -> bool {
         let saved = self.pos;
-        let mut tmp = Parser { input: self.input.clone(), pos: saved };
+        let mut tmp = Parser { input: self.input.clone(), pos: saved, infix_ops: self.infix_ops.clone() };
         tmp.skip_whitespace();
         for expected in kw.chars() {
             if let Some(c) = tmp.peek() {
