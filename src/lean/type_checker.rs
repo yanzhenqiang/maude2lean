@@ -753,18 +753,12 @@ impl<'a> TypeChecker<'a> {
             return true;
         }
 
-        // Proof irrelevance: any two terms of the same Prop type are defeq
-        // A type is a proposition if it is Sort(0), i.e., Prop
-        // Only apply to actual proof terms, not to types themselves (Sort/Pi)
-        if self.is_proof_quick(t) && self.is_proof_quick(s) {
-            if let (Ok(t_ty), Ok(s_ty)) = (self.infer(t), self.infer(s)) {
-                let t_is_prop = self.is_prop_type(&t_ty);
-                let s_is_prop = self.is_prop_type(&s_ty);
-                if t_is_prop && s_is_prop && self.is_def_eq(&t_ty, &s_ty) {
-                    return true;
-                }
-            }
-        }
+        // Proof irrelevance removed: the previous implementation incorrectly
+        // treated any two Prop-typed expressions as definitionally equal,
+        // which made distinct propositions (e.g. Eq A a b and Eq A c d)
+        // unify. Proper proof irrelevance requires distinguishing proof
+        // terms from proposition types, which this simplified checker does
+        // not do accurately.
 
         self.st.failure_cache.insert(pair, false);
         false

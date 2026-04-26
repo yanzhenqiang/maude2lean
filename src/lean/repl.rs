@@ -937,9 +937,9 @@ impl Repl {
             .unwrap_or(rest.len());
         let name = rest[..name_end].trim().to_string();
         let rest_after_name = rest[name_end..].trim_start().to_string();
-        let has_type = rest_after_name.starts_with(':');
-
-        let (ty, val_str) = if has_type {
+        let (ty, val_str) = if rest_after_name.starts_with(":=") {
+            (None, rest_after_name[2..].trim().to_string())
+        } else if rest_after_name.starts_with(':') {
             let rest = &rest_after_name[1..]; // skip ':'
             let parts: Vec<&str> = rest.splitn(2, ":=").collect();
             if parts.len() != 2 {
@@ -950,10 +950,7 @@ impl Repl {
             let ty = self.parse_and_convert(ty_str)?;
             (Some(ty), val_str.to_string())
         } else {
-            if !rest_after_name.starts_with(":=") {
-                return Err("Usage: :def <name> := <value>".to_string());
-            }
-            (None, rest_after_name[2..].trim().to_string())
+            return Err("Usage: :def <name> := <value> or :def <name> : <type> := <value>".to_string());
         };
 
         let value = self.parse_and_convert(&val_str)?;

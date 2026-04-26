@@ -543,344 +543,68 @@ def quicksort (A : Type) (le : A -> A -> Bool) (xs : List A) : List A :=
 -- Nat 上的 <=
 def nat_le (m n : Nat) : Bool := not (nat_gt m n)
 
--- -----------------------------------------------------------------
--- 20. 证明基础设施
--- -----------------------------------------------------------------
 
--- 逻辑合取
-inductive And (P : Prop) (Q : Prop) : Prop where
-| conj : P -> Q -> And P Q
+def dec_le (a b : Decimal) : Bool := not (dec_lt b a)
 
--- 真命题
-inductive True : Prop where
-| intro : True
+def e0  : Decimal := nat_to_dec 3
+def e1  : Decimal := nat_to_dec 1
+def e2  : Decimal := nat_to_dec 4
+def e3  : Decimal := nat_to_dec 1
+def e4  : Decimal := nat_to_dec 5
+def e5  : Decimal := nat_to_dec 9
+def e6  : Decimal := nat_to_dec 2
+def e7  : Decimal := nat_to_dec 6
+def e8  : Decimal := nat_to_dec 5
+def e9  : Decimal := nat_to_dec 3
+def e10 : Decimal := nat_to_dec 5
+def e11 : Decimal := nat_to_dec 8
+def e12 : Decimal := nat_to_dec 9
+def e13 : Decimal := nat_to_dec 7
+def e14 : Decimal := nat_to_dec 9
+def e15 : Decimal := nat_to_dec 3
+def e16 : Decimal := nat_to_dec 2
+def e17 : Decimal := nat_to_dec 3
+def e18 : Decimal := nat_to_dec 8
+def e19 : Decimal := nat_to_dec 4
+def e20 : Decimal := nat_to_dec 6
+def e21 : Decimal := nat_to_dec 2
+def e22 : Decimal := nat_to_dec 6
+def e23 : Decimal := nat_to_dec 4
+def e24 : Decimal := nat_to_dec 3
+def e25 : Decimal := nat_to_dec 3
+def e26 : Decimal := nat_to_dec 8
+def e27 : Decimal := nat_to_dec 3
+def e28 : Decimal := nat_to_dec 2
+def e29 : Decimal := nat_to_dec 7
 
--- Nat 列表有序谓词（递归定义，避免 indexed inductive 的 cases 限制）
-def SortedNat (xs : List Nat) : Prop :=
-  rec.List Nat (fun _ => Prop) True
-    (fun x xs ih => rec.List Nat (fun _ => Prop) True
-      (fun y ys ih2 => And (Eq Bool (nat_le x y) true) ih)
-      xs)
-    xs
-
--- Nat 列表最大值/最小值（空列表返回 zero）
-def nat_list_max (xs : List Nat) : Nat := list_max Nat nat_le zero xs
-def nat_list_min (xs : List Nat) : Nat := list_min Nat nat_le zero xs
-
--- 上界：列表中所有元素 <= pivot（即 max(xs) <= pivot）
-def list_upper_bound (pivot : Nat) (xs : List Nat) : Prop :=
-  Eq Bool (nat_le (nat_list_max xs) pivot) true
-
--- 下界：列表中所有元素 >= pivot（即 min(xs) >= pivot）
-def list_lower_bound (pivot : Nat) (xs : List Nat) : Prop :=
-  Eq Bool (nat_le pivot (nat_list_min xs)) true
-
--- 成员关系
-def list_mem (x : Nat) (xs : List Nat) : Bool :=
-  rec.List Nat (fun _ => Bool)
-    false
-    (fun y ys ih => match nat_eq x y : Bool with | true => true | false => ih)
-    xs
-
--- 基础引理：空列表有序
-theorem sorted_nil : SortedNat (nil Nat) := by
-  exact intro
-
--- 基础引理：单元素列表有序
-theorem sorted_single : forall (x : Nat), SortedNat (cons Nat x (nil Nat)) := by
-  intro x
-  exact intro
-
--- nat_le 反射性（关键引理）
-theorem nat_le_refl : forall (x : Nat), Eq Bool (nat_le x x) true := by
-  intro x
-  induction x
-  exact refl Bool true
-  intro x'
-  intro ih
-  exact ih
-
--- nat_le zero 最小元
-theorem nat_le_zero_min : forall (n : Nat), Eq Bool (nat_le zero n) true := by
-  intro n
-  induction n
-  exact refl Bool true
-  intro n'
-  intro ih
-  exact refl Bool true
-
--- 空列表的上界是任意 pivot
-theorem upper_bound_nil : forall (pivot : Nat), list_upper_bound pivot (nil Nat) := by
-  intro pivot
-  exact refl Bool true
-
--- 两个元素有序
-theorem sorted_two : forall (x y : Nat),
-  Eq Bool (nat_le x y) true -> SortedNat (cons Nat x (cons Nat y (nil Nat))) := by
-  intro x
-  intro y
-  intro h
-  exact conj (Eq Bool (nat_le x y) true) True h intro
-
--- 空列表的下界是 zero
-theorem lower_bound_nil_zero : list_lower_bound zero (nil Nat) := by
-  exact refl Bool true
-
--- Bool 双重否定
-theorem bool_double_neg : forall (b : Bool), Eq Bool (not (not b)) b := by
-  intro b
-  induction b
-  exact refl Bool false
-  exact refl Bool true
-
--- -----------------------------------------------------------------
--- 21. 列表有序性判定（计算函数）
--- -----------------------------------------------------------------
-
--- 列表是否整体有序（非递减）
-def is_sorted (xs : List Nat) : Bool :=
-  rec.List Nat (fun _ => Bool) true
-    (fun x xs ih => rec.List Nat (fun _ => Bool) true
-      (fun y ys _ => rec.Bool (fun _ => Bool) false ih (nat_le x y))
-      xs)
-    xs
-
-
--- And 投影
-def and_fst (P Q : Prop) (h : And P Q) : P :=
-  rec.And P Q (fun _ => P) (fun p q => p) h
-
-def and_snd (P Q : Prop) (h : And P Q) : Q :=
-  rec.And P Q (fun _ => Q) (fun p q => q) h
-
--- 所有元素 <= pivot
-def AllLeNat (pivot : Nat) (xs : List Nat) : Prop :=
-  rec.List Nat (fun _ => Prop) True
-    (fun x xs ih => And (Eq Bool (nat_le x pivot) true) ih)
-    xs
-
--- 所有元素 >= pivot
-def AllGeNat (pivot : Nat) (xs : List Nat) : Prop :=
-  rec.List Nat (fun _ => Prop) True
-    (fun x xs ih => And (Eq Bool (nat_le pivot x) true) ih)
-    xs
-
-
--- all_le_append：append 保持 AllLeNat
-def all_le_append (pivot : Nat) (xs ys : List Nat)
-  (h1 : AllLeNat pivot xs) (h2 : AllLeNat pivot ys) : AllLeNat pivot (list_append Nat xs ys) :=
-  rec.List Nat (fun zs : List Nat => AllLeNat pivot zs -> AllLeNat pivot (list_append Nat zs ys))
-    (fun h1 : AllLeNat pivot (nil Nat) => h2)
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllLeNat pivot xs' -> AllLeNat pivot (list_append Nat xs' ys) => fun h_xs' : AllLeNat pivot (cons Nat x xs') =>
-      conj (Eq Bool (nat_le x pivot) true) (AllLeNat pivot (list_append Nat xs' ys))
-        (and_fst (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') h_xs')
-        (ih (and_snd (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') h_xs')))
-    xs
-    h1
-
--- all_ge_append：append 保持 AllGeNat
-def all_ge_append (pivot : Nat) (xs ys : List Nat)
-  (h1 : AllGeNat pivot xs) (h2 : AllGeNat pivot ys) : AllGeNat pivot (list_append Nat xs ys) :=
-  rec.List Nat (fun zs : List Nat => AllGeNat pivot zs -> AllGeNat pivot (list_append Nat zs ys))
-    (fun h1 : AllGeNat pivot (nil Nat) => h2)
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllGeNat pivot xs' -> AllGeNat pivot (list_append Nat xs' ys) => fun h_xs' : AllGeNat pivot (cons Nat x xs') =>
-      conj (Eq Bool (nat_le pivot x) true) (AllGeNat pivot (list_append Nat xs' ys))
-        (and_fst (Eq Bool (nat_le pivot x) true) (AllGeNat pivot xs') h_xs')
-        (ih (and_snd (Eq Bool (nat_le pivot x) true) (AllGeNat pivot xs') h_xs')))
-    xs
-    h1
-
--- filter_preserves_all_le：filter 保持 AllLeNat
-def filter_preserves_all_le (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
-  (h : AllLeNat pivot xs) : AllLeNat pivot (list_filter Nat p xs) :=
-  rec.List Nat (fun ys : List Nat => AllLeNat pivot ys -> AllLeNat pivot (list_filter Nat p ys))
-    (fun _ : AllLeNat pivot (nil Nat) => intro)
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllLeNat pivot xs' -> AllLeNat pivot (list_filter Nat p xs') => fun h_xs : AllLeNat pivot (cons Nat x xs') =>
-      rec.Bool (fun b : Bool => AllLeNat pivot (
-        rec.Bool (fun _ : Bool => List Nat) (list_filter Nat p xs') (cons Nat x (list_filter Nat p xs')) b
-      ))
-        (ih (and_snd (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') h_xs))
-        (conj (Eq Bool (nat_le x pivot) true) (AllLeNat pivot (list_filter Nat p xs'))
-          (and_fst (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') h_xs)
-          (ih (and_snd (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') h_xs)))
-        (p x))
-    xs
-    h
-
--- filter_preserves_all_ge：filter 保持 AllGeNat
-def filter_preserves_all_ge (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
-  (h : AllGeNat pivot xs) : AllGeNat pivot (list_filter Nat p xs) :=
-  rec.List Nat (fun ys : List Nat => AllGeNat pivot ys -> AllGeNat pivot (list_filter Nat p ys))
-    (fun _ : AllGeNat pivot (nil Nat) => intro)
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllGeNat pivot xs' -> AllGeNat pivot (list_filter Nat p xs') => fun h_xs : AllGeNat pivot (cons Nat x xs') =>
-      rec.Bool (fun b : Bool => AllGeNat pivot (
-        rec.Bool (fun _ : Bool => List Nat) (list_filter Nat p xs') (cons Nat x (list_filter Nat p xs')) b
-      ))
-        (ih (and_snd (Eq Bool (nat_le pivot x) true) (AllGeNat pivot xs') h_xs))
-        (conj (Eq Bool (nat_le pivot x) true) (AllGeNat pivot (list_filter Nat p xs'))
-          (and_fst (Eq Bool (nat_le pivot x) true) (AllGeNat pivot xs') h_xs)
-          (ih (and_snd (Eq Bool (nat_le pivot x) true) (AllGeNat pivot xs') h_xs)))
-        (p x))
-    xs
-    h
-
--- filter_all_le：filter (fun x => x <= head) 的结果所有元素都 <= head
-def filter_all_le (head : Nat) (xs : List Nat) : AllLeNat head (list_filter Nat (fun x => nat_le x head) xs) :=
-  rec.List Nat (fun ys : List Nat => AllLeNat head (list_filter Nat (fun x => nat_le x head) ys))
-    intro
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllLeNat head (list_filter Nat (fun x => nat_le x head) xs') =>
-      rec.Bool (fun b : Bool => forall (h : Eq Bool (nat_le x head) b), AllLeNat head (
-        rec.Bool (fun _ : Bool => List Nat) (list_filter Nat (fun x => nat_le x head) xs') (cons Nat x (list_filter Nat (fun x => nat_le x head) xs')) b
-      ))
-        (fun _h : Eq Bool (nat_le x head) false => ih)
-        (fun h : Eq Bool (nat_le x head) true =>
-          conj (Eq Bool (nat_le x head) true) (AllLeNat head (list_filter Nat (fun x => nat_le x head) xs'))
-            h
-            ih)
-        (nat_le x head)
-        (refl Bool (nat_le x head)))
-    xs
-
--- filter_all_ge：filter (fun x => head <= x) 的结果所有元素都 >= head
-def filter_all_ge (head : Nat) (xs : List Nat) : AllGeNat head (list_filter Nat (fun x => nat_le head x) xs) :=
-  rec.List Nat (fun ys : List Nat => AllGeNat head (list_filter Nat (fun x => nat_le head x) ys))
-    intro
-    (fun x : Nat => fun xs' : List Nat => fun ih : AllGeNat head (list_filter Nat (fun x => nat_le head x) xs') =>
-      rec.Bool (fun b : Bool => forall (h : Eq Bool (nat_le head x) b), AllGeNat head (
-        rec.Bool (fun _ : Bool => List Nat) (list_filter Nat (fun x => nat_le head x) xs') (cons Nat x (list_filter Nat (fun x => nat_le head x) xs')) b
-      ))
-        (fun _h : Eq Bool (nat_le head x) false => ih)
-        (fun h : Eq Bool (nat_le head x) true =>
-          conj (Eq Bool (nat_le head x) true) (AllGeNat head (list_filter Nat (fun x => nat_le head x) xs'))
-            h
-            ih)
-        (nat_le head x)
-        (refl Bool (nat_le head x)))
-    xs
-
--- sorted_cons_ge：cons pivot ys 有序，当 ys 有序且 pivot <= ys 的每个元素
-def sorted_cons_ge (pivot : Nat) (ys : List Nat)
-  (sorted_y : SortedNat ys) (ge_y : AllGeNat pivot ys) : SortedNat (cons Nat pivot ys) :=
-  rec.List Nat (fun zs : List Nat => SortedNat zs -> AllGeNat pivot zs -> SortedNat (cons Nat pivot zs))
-    (fun _ : SortedNat (nil Nat) => fun _ : AllGeNat pivot (nil Nat) => intro)
-    (fun y : Nat => fun ys' : List Nat => fun ih : SortedNat ys' -> AllGeNat pivot ys' -> SortedNat (cons Nat pivot ys') => fun sorted_y_ys' : SortedNat (cons Nat y ys') => fun ge_y_ys' : AllGeNat pivot (cons Nat y ys') =>
-      conj (Eq Bool (nat_le pivot y) true) (SortedNat (cons Nat y ys'))
-        (and_fst (Eq Bool (nat_le pivot y) true) (AllGeNat pivot ys') ge_y_ys')
-        sorted_y_ys')
-    ys
-    sorted_y
-    ge_y
-
--- sorted_tail：从 SortedNat (cons x xs') 提取 SortedNat xs'
-def sorted_tail (x : Nat) (xs' : List Nat) (h : SortedNat (cons Nat x xs')) : SortedNat xs' :=
-  rec.List Nat (fun zs : List Nat => SortedNat (cons Nat x zs) -> SortedNat zs)
-    (fun _ : SortedNat (cons Nat x (nil Nat)) => intro)
-    (fun y : Nat => fun ys : List Nat => fun ih : SortedNat (cons Nat x ys) -> SortedNat ys => fun h : SortedNat (cons Nat x (cons Nat y ys)) =>
-      and_snd (Eq Bool (nat_le x y) true) (SortedNat (cons Nat y ys)) h)
-    xs'
-    h
-
--- append_sorted_cons：append xs (cons pivot ys) 有序
-def append_sorted_cons (xs : List Nat) (pivot : Nat) (ys : List Nat)
-  (sorted_xs : SortedNat xs) (sorted_ys : SortedNat ys)
-  (ge_ys : AllGeNat pivot ys) (le_xs : AllLeNat pivot xs) :
-  SortedNat (list_append Nat xs (cons Nat pivot ys)) :=
-  rec.List Nat (fun zs : List Nat => SortedNat zs -> AllLeNat pivot zs -> SortedNat (list_append Nat zs (cons Nat pivot ys)))
-    (fun _ : SortedNat (nil Nat) => fun _ : AllLeNat pivot (nil Nat) => sorted_cons_ge pivot ys sorted_ys ge_ys)
-    (fun x : Nat => fun xs' : List Nat => fun ih : SortedNat xs' -> AllLeNat pivot xs' -> SortedNat (list_append Nat xs' (cons Nat pivot ys)) => fun sorted_x_xs' : SortedNat (cons Nat x xs') => fun le_x_xs' : AllLeNat pivot (cons Nat x xs') =>
-      let h_x_le_pivot : Eq Bool (nat_le x pivot) true := and_fst (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') le_x_xs' in
-      let h_xs'_le_pivot : AllLeNat pivot xs' := and_snd (Eq Bool (nat_le x pivot) true) (AllLeNat pivot xs') le_x_xs' in
-      let h_sorted_xs' : SortedNat xs' := sorted_tail x xs' sorted_x_xs' in
-      conj (Eq Bool (nat_le x pivot) true) (SortedNat (list_append Nat xs' (cons Nat pivot ys)))
-        h_x_le_pivot
-        (ih h_sorted_xs' h_xs'_le_pivot))
-    xs
-    sorted_xs
-    le_xs
-
--- quicksort_preserves_all_le：quicksort 保持 AllLeNat
-def quicksort_preserves_all_le (pivot : Nat) (fuel : Nat) (xs : List Nat)
-  (h : AllLeNat pivot xs) : AllLeNat pivot (quicksort_fuel Nat nat_le fuel xs) :=
-  rec.Nat (fun fuel' : Nat => forall (zs : List Nat), AllLeNat pivot zs -> AllLeNat pivot (quicksort_fuel Nat nat_le fuel' zs))
-    (fun zs : List Nat => fun _ : AllLeNat pivot zs => intro)
-    (fun fuel' : Nat => fun ih : forall (zs : List Nat), AllLeNat pivot zs -> AllLeNat pivot (quicksort_fuel Nat nat_le fuel' zs) => fun zs : List Nat => fun h_zs : AllLeNat pivot zs =>
-      rec.List Nat (fun ws : List Nat => AllLeNat pivot ws -> AllLeNat pivot (quicksort_fuel Nat nat_le (succ fuel') ws))
-        (fun _ : AllLeNat pivot (nil Nat) => intro)
-        (fun head : Nat => fun tail : List Nat => fun _ : AllLeNat pivot tail -> AllLeNat pivot (quicksort_fuel Nat nat_le (succ fuel') tail) => fun h_tail : AllLeNat pivot (cons Nat head tail) =>
-          let left := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le x head) tail) in
-          let right := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le head x) tail) in
-          let h_left := filter_all_le head tail in
-          let h_right := filter_preserves_all_le pivot (fun x => nat_le head x) tail h_tail in
-          let sorted_left := ih (list_filter Nat (fun x => nat_le x head) tail) (filter_preserves_all_le pivot (fun x => nat_le x head) tail h_tail) in
-          let sorted_right := ih (list_filter Nat (fun x => nat_le head x) tail) h_right in
-          let h_head_le := and_fst (Eq Bool (nat_le head pivot) true) (AllLeNat pivot tail) h_tail in
-          all_le_append pivot left (cons Nat head right)
-            sorted_left
-            (conj (Eq Bool (nat_le head pivot) true) (AllLeNat pivot right)
-              h_head_le
-              sorted_right))
-        zs
-        h_zs)
-    fuel
-    xs
-    h
-
--- quicksort_preserves_all_ge：quicksort 保持 AllGeNat
-def quicksort_preserves_all_ge (pivot : Nat) (fuel : Nat) (xs : List Nat)
-  (h : AllGeNat pivot xs) : AllGeNat pivot (quicksort_fuel Nat nat_le fuel xs) :=
-  rec.Nat (fun fuel' : Nat => forall (zs : List Nat), AllGeNat pivot zs -> AllGeNat pivot (quicksort_fuel Nat nat_le fuel' zs))
-    (fun zs : List Nat => fun _ : AllGeNat pivot zs => intro)
-    (fun fuel' : Nat => fun ih : forall (zs : List Nat), AllGeNat pivot zs -> AllGeNat pivot (quicksort_fuel Nat nat_le fuel' zs) => fun zs : List Nat => fun h_zs : AllGeNat pivot zs =>
-      rec.List Nat (fun ws : List Nat => AllGeNat pivot ws -> AllGeNat pivot (quicksort_fuel Nat nat_le (succ fuel') ws))
-        (fun _ : AllGeNat pivot (nil Nat) => intro)
-        (fun head : Nat => fun tail : List Nat => fun _ : AllGeNat pivot tail -> AllGeNat pivot (quicksort_fuel Nat nat_le (succ fuel') tail) => fun h_tail : AllGeNat pivot (cons Nat head tail) =>
-          let left := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le x head) tail) in
-          let right := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le head x) tail) in
-          let h_left := filter_preserves_all_ge pivot (fun x => nat_le x head) tail h_tail in
-          let h_right := filter_all_ge head tail in
-          let sorted_left := ih (list_filter Nat (fun x => nat_le x head) tail) h_left in
-          let sorted_right := ih (list_filter Nat (fun x => nat_le head x) tail) h_right in
-          let h_head_ge := and_fst (Eq Bool (nat_le pivot head) true) (AllGeNat pivot tail) h_tail in
-          all_ge_append pivot left (cons Nat head right)
-            sorted_left
-            (conj (Eq Bool (nat_le pivot head) true) (AllGeNat pivot right)
-              h_head_ge
-              sorted_right))
-        zs
-        h_zs)
-    fuel
-    xs
-    h
-
--- 核心定理：quicksort_fuel 返回的列表总是有序的
-def quicksort_fuel_sorted (fuel : Nat) (xs : List Nat) : SortedNat (quicksort_fuel Nat nat_le fuel xs) :=
-  rec.Nat (fun fuel' : Nat => forall (zs : List Nat), SortedNat (quicksort_fuel Nat nat_le fuel' zs))
-    (fun zs : List Nat => intro)
-    (fun fuel' : Nat => fun ih : forall (zs : List Nat), SortedNat (quicksort_fuel Nat nat_le fuel' zs) => fun zs : List Nat =>
-      rec.List Nat (fun ws : List Nat => SortedNat (quicksort_fuel Nat nat_le (succ fuel') ws))
-        (fun _ : SortedNat (quicksort_fuel Nat nat_le (succ fuel') (nil Nat)) => intro)
-        (fun head : Nat => fun tail : List Nat => fun _ : SortedNat (quicksort_fuel Nat nat_le (succ fuel') tail) => fun _ : SortedNat (quicksort_fuel Nat nat_le (succ fuel') (cons Nat head tail)) =>
-          let left := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le x head) tail) in
-          let right := quicksort_fuel Nat nat_le fuel' (list_filter Nat (fun x => nat_le head x) tail) in
-          let sorted_left := ih (list_filter Nat (fun x => nat_le x head) tail) in
-          let sorted_right := ih (list_filter Nat (fun x => nat_le head x) tail) in
-          let le_left := quicksort_preserves_all_le head fuel' (list_filter Nat (fun x => nat_le x head) tail) (filter_all_le head tail) in
-          let ge_right := quicksort_preserves_all_ge head fuel' (list_filter Nat (fun x => nat_le head x) tail) (filter_all_ge head tail) in
-          append_sorted_cons left head right sorted_left (sorted_cons_ge head right sorted_right ge_right) ge_right le_left)
-        zs)
-    fuel
-    xs
-
--- 顶层包装定理
-theorem quicksort_sorted (xs : List Nat) : SortedNat (quicksort Nat nat_le xs) :=
-  quicksort_fuel_sorted (list_length Nat xs) xs
-
--- -----------------------------------------------------------------
--- 22. 相等替换（Eq 消除）
--- -----------------------------------------------------------------
-
-def eq_subst (A : Type) (a : A) (b : A) (P : A -> Prop) (h : Eq A a b) (pa : P a) : P b :=
-  rec.Eq A a (fun x : A => fun _ : Eq A a x => P x) pa b h
-
-def eq_sym (A : Type) (a : A) (b : A) (h : Eq A a b) : Eq A b a :=
-  eq_subst A a b (fun y : A => Eq A y a) h (refl A a)
+def input_list : List Decimal :=
+  cons Decimal e0 (
+  cons Decimal e1 (
+  cons Decimal e2 (
+  cons Decimal e3 (
+  cons Decimal e4 (
+  cons Decimal e5 (
+  cons Decimal e6 (
+  cons Decimal e7 (
+  cons Decimal e8 (
+  cons Decimal e9 (
+  cons Decimal e10 (
+  cons Decimal e11 (
+  cons Decimal e12 (
+  cons Decimal e13 (
+  cons Decimal e14 (
+  cons Decimal e15 (
+  cons Decimal e16 (
+  cons Decimal e17 (
+  cons Decimal e18 (
+  cons Decimal e19 (
+  cons Decimal e20 (
+  cons Decimal e21 (
+  cons Decimal e22 (
+  cons Decimal e23 (
+  cons Decimal e24 (
+  cons Decimal e25 (
+  cons Decimal e26 (
+  cons Decimal e27 (
+  cons Decimal e28 (
+  cons Decimal e29 (nil Decimal))))))))))))))))))))))))))))))
