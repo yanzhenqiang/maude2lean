@@ -14,7 +14,7 @@ def seq_converges_to (a : Nat -> Frac) (L : Real) : Prop :=
 -- 从柯西条件提取 witness N（使用选择公理）
 def cauchy_N (a : Nat -> Frac) (h : is_cauchy a) (k : Nat) : Nat :=
   choice Nat
-    (fun N => forall (m : Nat), forall (n : Nat), gt m N -> gt n N -> frac_lt (frac_abs (frac_sub (a m) (a n))) (frac_inv k))
+    (fun N : Nat => forall (m : Nat), forall (n : Nat), gt m N -> gt n N -> frac_lt (frac_abs (frac_sub (a m) (a n))) (frac_inv k))
     (h k)
 
 -- 从柯西条件推导自收敛性

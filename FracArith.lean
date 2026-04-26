@@ -30,11 +30,7 @@ theorem int_add_zero_left : forall (b : Int), Eq Int (int_add (ofNat 0) b) b :=
       -- 需要证明 ofNat (nat_add 0 n) = ofNat n
       -- 用已有的 nat_add_zero_right: nat_add 0 n = n
       -- 再用 eq_subst 替换
-      (fun n : Nat =>
-        eq_subst Nat (nat_add 0 n) n
-          (fun y : Nat => Eq Int (ofNat (nat_add 0 n)) (ofNat y))
-          (nat_add_zero_right n)
-          (refl Int (ofNat (nat_add 0 n))))
+      (fun n : Nat => refl Int (ofNat n))
       -- 分支2: b = negSucc n
       -- int_add (ofNat 0) (negSucc n) = negSucc n（直接由定义归约）
       (fun n : Nat => refl Int (negSucc n))
