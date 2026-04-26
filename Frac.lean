@@ -1,6 +1,9 @@
 -- 分数类型 Frac = Int / (Nat+1)
 -- 用 (num : Int, den : Nat) 表示 num/(den+1)，分母恒正
 
+import Nat
+import Int
+
 inductive Frac where
 | mk : Int -> Nat -> Frac
 

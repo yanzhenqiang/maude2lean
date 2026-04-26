@@ -1,6 +1,8 @@
 -- Nat 上的序关系（归纳族）
 -- le m n 表示 m <= n
 
+import Nat
+
 inductive le : Nat -> Nat -> Prop where
 | le_zero : forall (n : Nat), le zero n
 | le_succ : forall (m : Nat), forall (n : Nat), le m n -> le (succ m) (succ n)

@@ -1,3 +1,5 @@
+import Nat
+
 inductive Int where
 | ofNat : Nat -> Int
 | negSucc : Nat -> Int

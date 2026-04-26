@@ -1,6 +1,10 @@
 -- 自然数运算引理
 -- 依赖: Nat.lean, Eq.lean
 
+import Nat
+import Eq
+import Order
+
 -- n + 0 = n
 theorem nat_add_zero_right : forall (n : Nat), Eq Nat (nat_add n zero) n :=
   fun n : Nat =>

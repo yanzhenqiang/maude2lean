@@ -1,6 +1,20 @@
 -- 实数完备性：柯西序列收敛
 -- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, Cauchy.lean, Real.lean
 
+import Nat
+import Eq
+import Order
+import True
+import Int
+import IntOrder
+import Frac
+import NatProof
+import FracArith
+import Cauchy
+import Real
+import Exists
+import WellFounded
+
 -- 序列收敛到实数
 -- 用 Quot.ind 定义，天然代表元无关，无需 seq_converges_to_compat
 def seq_converges_to (a : Nat -> Frac) (L : Real) : Prop :=

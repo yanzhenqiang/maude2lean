@@ -203,6 +203,8 @@ impl Repl {
 
     pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
         for filepath in files {
+            // Track this file so imports won't reload it
+            self.loaded_files.insert(filepath.to_string());
             // Clear file-scoped state for each new file
             self.file_variables.clear();
             self.infix_ops.clear();

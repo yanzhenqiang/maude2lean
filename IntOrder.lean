@@ -1,6 +1,11 @@
 -- Int 序关系、绝对值、减法
 -- 依赖: Order.lean (le), True.lean (True, False)
 
+import Nat
+import Order
+import True
+import Int
+
 -- Int 后继（用 recursor，避免嵌套 match）
 def int_succ (a : Int) : Int :=
   rec.Int (fun _ => Int) (fun n => ofNat (succ n)) (fun n => ofNat zero) a

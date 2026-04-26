@@ -1,6 +1,15 @@
 -- 分数算术引理
 -- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, NatProof.lean
 
+import Nat
+import Eq
+import Order
+import True
+import Int
+import IntOrder
+import Frac
+import NatProof
+
 -- =====================================================================
 -- 零分数
 -- =====================================================================

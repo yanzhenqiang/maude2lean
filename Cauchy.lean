@@ -2,6 +2,16 @@
 -- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean
 -- 注意: 当前内核中 Pi(x:A).Prop : Type，所以 is_cauchy 的类型是 Type
 
+import Nat
+import Eq
+import Order
+import True
+import Int
+import IntOrder
+import Frac
+import NatProof
+import FracArith
+
 -- 序列 a : Nat -> Frac 是柯西的，如果：
 -- forall (k : Nat), exists (N : Nat), forall (m : Nat), forall (n : Nat),
 --   m > N -> n > N -> |a_m - a_n| < 1/(k+1)
