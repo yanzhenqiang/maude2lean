@@ -31,6 +31,43 @@ impl Environment {
         self.constants.get(name)
     }
 
+    /// Get all constructor names for an inductive type.
+    /// Returns None if the type is not found or is not inductive.
+    pub fn get_constructors(&self, type_name: &Name) -> Option<Vec<Name>> {
+        self.find(type_name)?.to_inductive_val().map(|v| v.ctors.clone())
+    }
+
+    /// Get a constructor name by index for an inductive type.
+    /// Returns None if the type is not found or index is out of bounds.
+    pub fn get_constructor(&self, type_name: &Name, idx: usize) -> Option<Name> {
+        let ctors = self.get_constructors(type_name)?;
+        ctors.get(idx).cloned()
+    }
+
+    /// Get a constructor name by its bare name, searching all constructors.
+    /// Returns the fully-qualified name if exactly one match is found.
+    pub fn resolve_ctor_name(&self, bare: &str) -> Option<Name> {
+        let mut candidates = Vec::new();
+        for (_, info) in self.constants.iter() {
+            if let Some(cval) = info.to_constructor_val() {
+                if cval.constant_val.name.last() == bare {
+                    candidates.push(cval.constant_val.name.clone());
+                }
+            }
+        }
+        if candidates.len() == 1 {
+            Some(candidates[0].clone())
+        } else {
+            None
+        }
+    }
+
+    /// Get a constructor name by its bare name, scoped to a specific inductive type.
+    pub fn resolve_ctor_name_in(&self, type_name: &Name, bare: &str) -> Option<Name> {
+        let ctors = self.get_constructors(type_name)?;
+        ctors.iter().find(|c| c.last() == bare).cloned()
+    }
+
     /// Get a constant by name (panics if not found)
     pub fn get(&self, name: &Name) -> &ConstantInfo {
         self.constants.get(name).expect("Constant not found")

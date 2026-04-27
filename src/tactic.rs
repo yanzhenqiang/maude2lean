@@ -365,10 +365,12 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        // Build refl proof: Eq.refl A a
+        // Build refl proof: look up Eq.refl from the environment registry
+        let refl_name = self.env.get_constructor(&Name::new("Eq"), 0)
+            .ok_or("Eq.refl not found in environment: is lib/Eq.cic loaded?")?;
         let mut proof = Expr::mk_app(
             Expr::mk_app(
-                Expr::mk_const(Name::new("Eq").extend("refl"), vec![]),
+                Expr::mk_const(refl_name, vec![]),
                 a_type,
             ),
             a,

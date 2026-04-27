@@ -3,6 +3,11 @@ use super::expr::*;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Default numeric literal expansion target.
+/// These are the names used when parsing numeric literals like `3`.
+const NAT_ZERO_CTOR: &str = "Nat.zero";
+const NAT_SUCC_CTOR: &str = "Nat.succ";
+
 /// A simple parser for Lean-like expressions in the REPL.
 ///
 /// Supported syntax:
@@ -57,27 +62,10 @@ impl ParsedExpr {
                 if let Some(e) = env_bindings.get(name) {
                     return e.clone();
                 }
-                // Namespace resolution: bare constructor names are resolved to Type.ctor
-                // by matching the last component of registered namespaced constructors.
-                let mut candidates = Vec::new();
-                for (key, expr) in env_bindings.iter() {
-                    if let Some(pos) = key.rfind('.') {
-                        if &key[pos + 1..] == name {
-                            if let Expr::Const(ref cname, _) = expr {
-                                if let Some(info) = env.find(cname) {
-                                    if info.is_constructor() {
-                                        candidates.push(expr.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if candidates.len() == 1 {
-                    return candidates[0].clone();
-                }
-                if candidates.len() > 1 {
-                    panic!("Ambiguous constructor name '{}': multiple matches", name);
+                // Registry-driven namespace resolution: bare constructor names
+                // are resolved to Type.ctor by querying the environment.
+                if let Some(resolved) = env.resolve_ctor_name(name) {
+                    return Expr::mk_const(resolved, vec![]);
                 }
                 // Fallback: parse as hierarchical name
                 let name_parts: Vec<&str> = name.split('.').collect();
@@ -181,28 +169,10 @@ impl ParsedExpr {
         }
     }
 
-    /// Resolve a bare constructor name to its fully-qualified Name using env_bindings.
-    /// Returns None if no unique match is found.
-    fn resolve_ctor_name(bare: &str, env_bindings: &HashMap<String, Expr>, env: &Environment) -> Option<Name> {
-        let mut candidates = Vec::new();
-        for (key, expr) in env_bindings.iter() {
-            if let Some(pos) = key.rfind('.') {
-                if &key[pos + 1..] == bare {
-                    if let Expr::Const(ref cname, _) = expr {
-                        if let Some(info) = env.find(cname) {
-                            if info.is_constructor() {
-                                candidates.push(cname.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if candidates.len() == 1 {
-            Some(candidates[0].clone())
-        } else {
-            None
-        }
+    /// Resolve a bare constructor name to its fully-qualified Name.
+    /// Delegates to the environment registry.
+    fn resolve_ctor_name(bare: &str, _env_bindings: &HashMap<String, Expr>, env: &Environment) -> Option<Name> {
+        env.resolve_ctor_name(bare)
     }
 
     fn desugar_match(&self, scrutinee: &ParsedExpr, motive: &ParsedExpr, branches: &[(ParsedExpr, ParsedExpr)], env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>) -> Expr {
@@ -1901,9 +1871,9 @@ impl Parser {
             }
         }
         // Expand numeric literal to Nat.succ^n Nat.zero directly in parser
-        let mut result = ParsedExpr::Const("Nat.zero".to_string());
+        let mut result = ParsedExpr::Const(NAT_ZERO_CTOR.to_string());
         for _ in 0..num {
-            result = ParsedExpr::App(Box::new(ParsedExpr::Const("Nat.succ".to_string())), Box::new(result));
+            result = ParsedExpr::App(Box::new(ParsedExpr::Const(NAT_SUCC_CTOR.to_string())), Box::new(result));
         }
         Ok(result)
     }
@@ -2083,11 +2053,11 @@ mod tests {
         let mut current = e;
         let mut count = 0;
         while let ParsedExpr::App(f, a) = current {
-            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == "Nat.succ"));
+            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == NAT_SUCC_CTOR));
             current = *a;
             count += 1;
         }
-        assert!(matches!(current, ParsedExpr::Const(name) if name == "Nat.zero"));
+        assert!(matches!(current, ParsedExpr::Const(name) if name == NAT_ZERO_CTOR));
         assert_eq!(count, 3);
     }
 
@@ -2291,13 +2261,13 @@ mod tests {
         let mut current = e;
         let mut count = 0;
         while let ParsedExpr::App(f, a) = current {
-            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == "Nat.succ") {
+            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == NAT_SUCC_CTOR) {
                 return false;
             }
             current = a;
             count += 1;
         }
-        matches!(current, ParsedExpr::Const(name) if name == "Nat.zero") && count == n
+        matches!(current, ParsedExpr::Const(name) if name == NAT_ZERO_CTOR) && count == n
     }
 
     #[test]

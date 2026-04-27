@@ -19,6 +19,14 @@ impl Name {
     pub fn to_string(&self) -> String {
         self.0.join(".")
     }
+
+    pub fn last(&self) -> &str {
+        self.0.last().map(|s| s.as_str()).unwrap_or("")
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 /// Universe levels
