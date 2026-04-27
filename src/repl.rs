@@ -649,6 +649,9 @@ impl Repl {
                     for ctor_name in &ind_val.ctors {
                         let cn = ctor_name.to_string();
                         self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+                        // Also register namespaced alias: Type.ctor
+                        let namespaced = format!("{}.{}", name, cn);
+                        self.env_bindings.insert(namespaced, Expr::mk_const(ctor_name.clone(), vec![]));
                     }
                 }
 
@@ -709,6 +712,13 @@ impl Repl {
                         for ctor_name in &ind_val.ctors {
                             let cn = ctor_name.to_string();
                             self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
+                            // Also register bare-name alias if not already taken.
+                            // e.g. "Even.zero" also registers "zero" -> Const(Even.zero)
+                            if let Some(pos) = cn.rfind('.') {
+                                let bare = &cn[pos + 1..];
+                                self.env_bindings.entry(bare.to_string())
+                                    .or_insert(Expr::mk_const(ctor_name.clone(), vec![]));
+                            }
                         }
                     }
                     self.env_bindings.insert(name.clone(), Expr::mk_const(Name::new(name), vec![]));
