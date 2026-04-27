@@ -3,10 +3,6 @@ use super::expr::*;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Default numeric literal expansion target.
-/// These are the names used when parsing numeric literals like `3`.
-const NAT_ZERO_CTOR: &str = "Nat.zero";
-const NAT_SUCC_CTOR: &str = "Nat.succ";
 
 /// A simple parser for Lean-like expressions in the REPL.
 ///
@@ -26,6 +22,9 @@ const NAT_SUCC_CTOR: &str = "Nat.succ";
 pub enum ParsedExpr {
     BVar(u64),
     Const(String),
+    /// Numeric literal (e.g. 3). Expansion to succ^n zero is deferred to to_expr
+    /// so the environment can resolve the actual constructor names.
+    NatLit(u64),
     App(Box<ParsedExpr>, Box<ParsedExpr>),
     Lambda(String, Box<ParsedExpr>, Box<ParsedExpr>), // name, type, body
     Pi(String, Box<ParsedExpr>, Box<ParsedExpr>),     // name, type, body
@@ -74,6 +73,18 @@ impl ParsedExpr {
                     lean_name = lean_name.extend(part);
                 }
                 Expr::mk_const(lean_name, vec![])
+            }
+            ParsedExpr::NatLit(n) => {
+                // Resolve Nat constructors from the environment registry.
+                let zero_name = env.get_constructor(&Name::new("Nat"), 0)
+                    .unwrap_or_else(|| Name::new("Nat").extend("zero"));
+                let succ_name = env.get_constructor(&Name::new("Nat"), 1)
+                    .unwrap_or_else(|| Name::new("Nat").extend("succ"));
+                let mut result = Expr::mk_const(zero_name, vec![]);
+                for _ in 0..*n {
+                    result = Expr::mk_app(Expr::mk_const(succ_name.clone(), vec![]), result);
+                }
+                result
             }
             ParsedExpr::App(f, a) => {
                 let f_expr = f.to_expr(env_bindings, env, bound_vars);
@@ -1870,12 +1881,9 @@ impl Parser {
                 break;
             }
         }
-        // Expand numeric literal to Nat.succ^n Nat.zero directly in parser
-        let mut result = ParsedExpr::Const(NAT_ZERO_CTOR.to_string());
-        for _ in 0..num {
-            result = ParsedExpr::App(Box::new(ParsedExpr::Const(NAT_SUCC_CTOR.to_string())), Box::new(result));
-        }
-        Ok(result)
+        // Defer numeric literal expansion to to_expr so the environment
+        // can resolve the actual constructor names (registry-driven).
+        Ok(ParsedExpr::NatLit(num))
     }
 
     fn parse_ident_or_bvar(&mut self) -> Result<ParsedExpr, String> {
@@ -2049,16 +2057,8 @@ mod tests {
     #[test]
     fn test_parse_nat_lit() {
         let e = parse("3");
-        // Should expand to App(App(App(Const("succ"), Const("succ")), Const("succ")), Const("zero"))
-        let mut current = e;
-        let mut count = 0;
-        while let ParsedExpr::App(f, a) = current {
-            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == NAT_SUCC_CTOR));
-            current = *a;
-            count += 1;
-        }
-        assert!(matches!(current, ParsedExpr::Const(name) if name == NAT_ZERO_CTOR));
-        assert_eq!(count, 3);
+        // Numeric literals are now kept as NatLit(n) and expanded in to_expr
+        assert!(matches!(e, ParsedExpr::NatLit(3)));
     }
 
     #[test]
@@ -2208,14 +2208,14 @@ mod tests {
     #[test]
     fn test_parse_infix_add() {
         let e = parse("2 + 3");
-        // Should desugar to add 2 3 = App(App(Const("add"), succ(succ(zero))), succ(succ(succ(zero))))
+        // Should desugar to add 2 3 = App(App(Const("add"), NatLit(2)), NatLit(3))
         match e {
             ParsedExpr::App(f, rhs) => {
                 match f.as_ref() {
                     ParsedExpr::App(op, lhs) => {
                         assert!(matches!(op.as_ref(), ParsedExpr::Const(name) if name == "add"));
-                        assert!(is_nat_lit(lhs.as_ref(), 2));
-                        assert!(is_nat_lit(rhs.as_ref(), 3));
+                        assert!(matches!(lhs.as_ref(), ParsedExpr::NatLit(2)));
+                        assert!(matches!(rhs.as_ref(), ParsedExpr::NatLit(3)));
                     }
                     _ => panic!("Expected App(App(add, 2), 3)"),
                 }
@@ -2233,15 +2233,15 @@ mod tests {
                 match f.as_ref() {
                     ParsedExpr::App(op, lhs) => {
                         assert!(matches!(op.as_ref(), ParsedExpr::Const(name) if name == "add"));
-                        assert!(is_nat_lit(lhs.as_ref(), 2));
+                        assert!(matches!(lhs.as_ref(), ParsedExpr::NatLit(2)));
                         // rhs should be mul 3 4
                         match rhs.as_ref() {
                             ParsedExpr::App(f2, rhs2) => {
                                 match f2.as_ref() {
                                     ParsedExpr::App(op2, lhs2) => {
                                         assert!(matches!(op2.as_ref(), ParsedExpr::Const(name) if name == "mul"));
-                                        assert!(is_nat_lit(lhs2.as_ref(), 3));
-                                        assert!(is_nat_lit(rhs2.as_ref(), 4));
+                                        assert!(matches!(lhs2.as_ref(), ParsedExpr::NatLit(3)));
+                                        assert!(matches!(rhs2.as_ref(), ParsedExpr::NatLit(4)));
                                     }
                                     _ => panic!("Expected mul"),
                                 }
@@ -2254,20 +2254,6 @@ mod tests {
             }
             _ => panic!("Expected App"),
         }
-    }
-
-    /// Check if a ParsedExpr is succ^n zero
-    fn is_nat_lit(e: &ParsedExpr, n: u64) -> bool {
-        let mut current = e;
-        let mut count = 0;
-        while let ParsedExpr::App(f, a) = current {
-            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == NAT_SUCC_CTOR) {
-                return false;
-            }
-            current = a;
-            count += 1;
-        }
-        matches!(current, ParsedExpr::Const(name) if name == NAT_ZERO_CTOR) && count == n
     }
 
     #[test]

@@ -5,6 +5,15 @@ use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Classification of a subgoal. Distinguishes plain proof goals from
+/// function-body goals (e.g. induction minor premises) where the proof
+/// term must be a lambda abstracting subgoal-local variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalKind {
+    Proof,
+    Function,
+}
+
 /// A proof goal: local context + target type + placeholder metavariable
 #[derive(Debug, Clone)]
 pub struct Goal {
@@ -14,10 +23,9 @@ pub struct Goal {
     /// Length of lctx when this goal was created. CDecls added after this
     /// point are parameters of the subgoal and need lambda abstraction.
     pub lctx_len_at_creation: usize,
-    /// Whether this subgoal needs CDecl abstraction when solved.
-    /// Set to true for induction minor premises, where the proof term
-    /// must be a function referencing subgoal-local variables.
-    pub needs_cdecl_abstraction: bool,
+    /// What kind of subgoal this is. Function goals get their local
+    /// CDecls abstracted into lambdas when solved.
+    pub kind: GoalKind,
 }
 
 /// Lightweight tactic engine
@@ -58,7 +66,7 @@ impl<'a> TacticEngine<'a> {
             num_params: 0,
             param_decl_indices: std::collections::HashSet::new(),
         };
-        engine.push_goal(initial_target, LocalCtx::new(), false);
+        engine.push_goal(initial_target, LocalCtx::new(), GoalKind::Proof);
         engine
     }
 
@@ -68,7 +76,7 @@ impl<'a> TacticEngine<'a> {
         Name::new(&format!("_tactic_mvar_{}", idx))
     }
 
-    fn push_goal(&mut self, target: Expr, lctx: LocalCtx, needs_cdecl_abstraction: bool) -> Name {
+    fn push_goal(&mut self, target: Expr, lctx: LocalCtx, kind: GoalKind) -> Name {
         let mvar = self.fresh_mvar_name();
         let lctx_len = lctx.len();
         self.goals.push(Goal {
@@ -76,7 +84,7 @@ impl<'a> TacticEngine<'a> {
             target,
             mvar: mvar.clone(),
             lctx_len_at_creation: lctx_len,
-            needs_cdecl_abstraction,
+            kind,
         });
         mvar
     }
@@ -264,7 +272,7 @@ impl<'a> TacticEngine<'a> {
         }
 
         let mut final_proof = proof.clone();
-        if goal.needs_cdecl_abstraction {
+        if goal.kind == GoalKind::Function {
             final_proof = Self::wrap_proof_with_cdecls(&final_proof, &goal.lctx, goal.lctx_len_at_creation);
         }
 
@@ -311,7 +319,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each premise (reversed so the first premise is the current goal)
         let mut subgoal_mvars: Vec<Expr> = Vec::new();
         for (idx, (_name, _bi, dom)) in premises.iter().enumerate().rev() {
-            let mvar_name = self.push_goal(dom.clone(), goal.lctx.clone(), false);
+            let mvar_name = self.push_goal(dom.clone(), goal.lctx.clone(), GoalKind::Proof);
 
             // Create a lambda for the proof term
             let mvar_expr = Expr::mk_mvar(mvar_name.clone());
@@ -376,7 +384,7 @@ impl<'a> TacticEngine<'a> {
             a,
         );
 
-        if goal.needs_cdecl_abstraction {
+        if goal.kind == GoalKind::Function {
             proof = Self::wrap_proof_with_cdecls(&proof, &goal.lctx, goal.lctx_len_at_creation);
         }
 
@@ -533,7 +541,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each minor premise (in reverse so first is current)
         let mut minor_mvars = Vec::new();
         for minor_ty in minor_types.iter().rev() {
-            let mvar_name = self.push_goal(minor_ty.clone(), subgoal_lctx.clone(), true);
+            let mvar_name = self.push_goal(minor_ty.clone(), subgoal_lctx.clone(), GoalKind::Function);
             minor_mvars.push(Expr::mk_mvar(mvar_name));
         }
 
@@ -628,7 +636,7 @@ impl<'a> TacticEngine<'a> {
 
         // Create a new goal: target with 'from' replaced by 'to'
         let new_target = replace_expr(&target, &from, &to);
-        let new_mvar = self.push_goal(new_target.clone(), goal.lctx.clone(), false);
+        let new_mvar = self.push_goal(new_target.clone(), goal.lctx.clone(), GoalKind::Proof);
 
         // Build motive P = fun x => target[x/from]
         let motive_body = replace_expr(&target, &from, &Expr::mk_bvar(0));

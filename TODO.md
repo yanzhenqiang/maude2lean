@@ -3,7 +3,9 @@
 ## Code Quality / Readability
 
 - **Refactor `Goal.needs_cdecl_abstraction`**: The flag distinguishing function subgoals (need CDecl abstraction) from plain proof subgoals (don't need) is a workaround. A cleaner approach would be to track goal kind explicitly or redesign the mvar system so subgoals inherently know whether they represent function bodies or proof terms.
+  - **Status**: Replaced `needs_cdecl_abstraction: bool` with `GoalKind` enum (`Proof` / `Function`). `tactic_induction` creates minor-premise subgoals as `GoalKind::Function`; all other subgoals are `GoalKind::Proof`. This makes the distinction explicit and self-documenting.
 - **Reduce hardcoding in Rust**: Constructor names like `Eq.refl`, `Nat.zero`, `Nat.succ` are hardcoded in tactic.rs and repl_parser.rs. Consider a registry-driven approach where the kernel exposes constructor metadata so the parser/tactic engine doesn't need string constants.
+  - **Status**: `Eq.refl` in `tactic.rs` already uses `env.get_constructor`. Numeric literals in `repl_parser.rs` now use `ParsedExpr::NatLit(n)` with deferred expansion in `to_expr` via `env.get_constructor`, eliminating `NAT_ZERO_CTOR`/`NAT_SUCC_CTOR` constants.
 - **Clean up `to_expr` namespace resolution**: The bare-name-to-namespaced fallback in `repl_parser.rs` works but could be more principled with a dedicated name-resolution pass.
 
 ## Known Issues
