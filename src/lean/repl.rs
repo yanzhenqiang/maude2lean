@@ -378,10 +378,12 @@ impl Repl {
         let saved_notations = self.notations.clone();
         let saved_stack = self.section_stack.clone();
 
-        // Clear file-scoped state for the imported file
+        // Track which infix/notation symbols existed before import
+        let prev_infix_keys: HashSet<String> = self.infix_ops.keys().cloned().collect();
+        let prev_notation_keys: HashSet<String> = self.notations.keys().cloned().collect();
+
+        // Clear file-scoped state for the imported file (infix/notation are inherited)
         self.file_variables.clear();
-        self.infix_ops.clear();
-        self.notations.clear();
         self.section_stack.clear();
 
         let result = (|| {
@@ -401,11 +403,29 @@ impl Repl {
             Ok(())
         })();
 
-        // Restore file-scoped state (imports don't leak local variables/notations)
+        // Collect new infix/notation definitions from imported file
+        let imported_infix: HashMap<String, (i32, String, bool)> = self.infix_ops.iter()
+            .filter(|(k, _)| !prev_infix_keys.contains(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let imported_notations: HashMap<String, super::repl_parser::ParsedExpr> = self.notations.iter()
+            .filter(|(k, _)| !prev_notation_keys.contains(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        // Restore file-scoped state
         self.file_variables = saved_variables;
         self.infix_ops = saved_infix;
         self.notations = saved_notations;
         self.section_stack = saved_stack;
+
+        // Merge exported infix/notation definitions (current file takes precedence)
+        for (k, v) in imported_infix {
+            self.infix_ops.entry(k).or_insert(v);
+        }
+        for (k, v) in imported_notations {
+            self.notations.entry(k).or_insert(v);
+        }
 
         result
     }
