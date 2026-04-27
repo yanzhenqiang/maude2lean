@@ -906,7 +906,33 @@ impl Repl {
         // Embed params into value as lambdas
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if !is_tactic {
+        if is_tactic {
+            // For tactic blocks, the proof term contains FVars from the local context.
+            // Abstract them back to BVars and wrap with lambdas.
+            // Non-param hypotheses first (in reverse introduction order).
+            for (decl_idx, fvar_name, ty) in introduced_vars.iter().rev() {
+                if param_decl_indices.contains(decl_idx) {
+                    continue; // theorem params handled below
+                }
+                final_value = final_value.abstract_fvar(fvar_name, 0);
+                final_value = Expr::Lambda(
+                    fvar_name.clone(),
+                    BinderInfo::Default,
+                    Rc::new(ty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+            // Theorem parameters (in reverse order).
+            for (pname, pty) in param_exprs.iter().rev() {
+                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
+                final_value = Expr::Lambda(
+                    Name::new(pname),
+                    BinderInfo::Default,
+                    Rc::new(pty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+        } else {
             for (pname, pty) in param_exprs.iter().rev() {
                 // The parser already converts parameter names to BVars via bound_vars,
                 // so we just wrap with lambdas directly. Calling abstract_fvar here
@@ -1059,7 +1085,31 @@ impl Repl {
         // Embed params into value as lambdas
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if !is_tactic {
+        if is_tactic {
+            // For tactic blocks, the proof term contains FVars from the local context.
+            // Abstract them back to BVars and wrap with lambdas.
+            for (decl_idx, fvar_name, ty) in introduced_vars.iter().rev() {
+                if param_decl_indices.contains(decl_idx) {
+                    continue;
+                }
+                final_value = final_value.abstract_fvar(fvar_name, 0);
+                final_value = Expr::Lambda(
+                    fvar_name.clone(),
+                    BinderInfo::Default,
+                    Rc::new(ty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+            for (pname, pty) in param_exprs.iter().rev() {
+                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
+                final_value = Expr::Lambda(
+                    Name::new(pname),
+                    BinderInfo::Default,
+                    Rc::new(pty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+        } else {
             for (pname, pty) in param_exprs.iter().rev() {
                 // The parser already converts parameter names to BVars via bound_vars,
                 // so we just wrap with lambdas directly. Calling abstract_fvar here

@@ -176,9 +176,11 @@ impl LocalCtx {
     pub fn mk_local_decl(&mut self, name: Name, user_name: Name, ty: Expr, bi: BinderInfo) -> LocalDecl {
         let idx = self.next_index;
         self.next_index += 1;
+        // Generate a unique internal name to avoid FVar name collisions
+        let unique_name = Name::new(&format!("{}.{}", name.to_string(), idx));
         let decl = LocalDecl::CDecl {
             index: idx,
-            name: name.clone(),
+            name: unique_name.clone(),
             user_name,
             ty,
             bi,
@@ -191,9 +193,11 @@ impl LocalCtx {
     pub fn mk_let_decl(&mut self, name: Name, user_name: Name, ty: Expr, value: Expr) -> LocalDecl {
         let idx = self.next_index;
         self.next_index += 1;
+        // Generate a unique internal name to avoid FVar name collisions
+        let unique_name = Name::new(&format!("{}.{}", name.to_string(), idx));
         let decl = LocalDecl::LDecl {
             index: idx,
-            name: name.clone(),
+            name: unique_name.clone(),
             user_name,
             ty,
             value,
@@ -202,20 +206,25 @@ impl LocalCtx {
         decl
     }
 
-    /// Find a local declaration by name (most recent first)
+    /// Find a local declaration by user-visible name (most recent first)
     pub fn find_local_decl(&self, name: &Name) -> Option<&LocalDecl> {
+        self.decls.iter().rev().find(|d| d.get_user_name() == name)
+    }
+
+    /// Find a local declaration by its unique internal name (most recent first)
+    pub fn find_local_decl_by_name(&self, name: &Name) -> Option<&LocalDecl> {
         self.decls.iter().rev().find(|d| d.get_name() == name)
     }
 
-    /// Get a local declaration by name (panics if not found)
+    /// Get a local declaration by user-visible name (panics if not found)
     pub fn get_local_decl(&self, name: &Name) -> &LocalDecl {
         self.find_local_decl(name).expect("Local declaration not found")
     }
 
-    /// Get the type of an FVar
+    /// Get the type of an FVar (looks up by unique internal name)
     pub fn get_type(&self, e: &Expr) -> Option<&Expr> {
         if let Expr::FVar(name) = e {
-            self.find_local_decl(name).map(|d| d.get_type())
+            self.find_local_decl_by_name(name).map(|d| d.get_type())
         } else {
             None
         }
@@ -224,7 +233,7 @@ impl LocalCtx {
     /// Get the value of an FVar (if it's a let-binding)
     pub fn get_value(&self, e: &Expr) -> Option<&Expr> {
         if let Expr::FVar(name) = e {
-            self.find_local_decl(name).and_then(|d| d.get_value())
+            self.find_local_decl_by_name(name).and_then(|d| d.get_value())
         } else {
             None
         }
@@ -233,7 +242,7 @@ impl LocalCtx {
     /// Check if FVar is a let-binding
     pub fn is_let_fvar(&self, e: &Expr) -> bool {
         if let Expr::FVar(name) = e {
-            self.find_local_decl(name).map_or(false, |d| d.get_value().is_some())
+            self.find_local_decl_by_name(name).map_or(false, |d| d.get_value().is_some())
         } else {
             false
         }

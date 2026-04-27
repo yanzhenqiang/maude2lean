@@ -4,7 +4,7 @@
 import Nat
 import Eq
 import Order
-import True
+import logic
 import Int
 import IntOrder
 import Frac

@@ -90,38 +90,29 @@ impl<'a> TacticEngine<'a> {
         self.goals.len()
     }
 
-    /// Assign a metavariable to a value
-    fn wrap_proof_with_lctx(proof: &Expr, lctx: &LocalCtx) -> Expr {
+    /// Assign a metavariable to a value.
+    /// Only wraps let-bindings (LDecls) into the proof term.
+    /// Lambda abstractions for CDecls are added at the top level after build_proof.
+    fn wrap_proof_with_lets(proof: &Expr, lctx: &LocalCtx) -> Expr {
         let mut result = proof.clone();
         let decls: Vec<_> = lctx.iter_decls().collect();
         for decl in decls.iter().rev() {
-            match decl {
-                LocalDecl::CDecl { name, ty, .. } => {
-                    result = result.abstract_fvar(name, 0);
-                    result = Expr::Lambda(
-                        name.clone(),
-                        BinderInfo::Default,
-                        Rc::new(ty.clone()),
-                        Rc::new(result),
-                    );
-                }
-                LocalDecl::LDecl { name, user_name, ty, value, .. } => {
-                    result = result.abstract_fvar(name, 0);
-                    result = Expr::Let(
-                        user_name.clone(),
-                        Rc::new(ty.clone()),
-                        Rc::new(value.clone()),
-                        Rc::new(result),
-                        false,
-                    );
-                }
+            if let LocalDecl::LDecl { name, user_name, ty, value, .. } = decl {
+                result = result.abstract_fvar(name, 0);
+                result = Expr::Let(
+                    user_name.clone(),
+                    Rc::new(ty.clone()),
+                    Rc::new(value.clone()),
+                    Rc::new(result),
+                    false,
+                );
             }
         }
         result
     }
 
     pub fn assign_mvar(&mut self, name: &Name, val: Expr, lctx: &LocalCtx) {
-        let wrapped = Self::wrap_proof_with_lctx(&val, lctx);
+        let wrapped = Self::wrap_proof_with_lets(&val, lctx);
         self.mvar_assignments.insert(name.clone(), wrapped);
     }
 

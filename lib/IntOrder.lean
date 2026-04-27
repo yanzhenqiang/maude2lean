@@ -3,7 +3,7 @@
 
 import Nat
 import Order
-import True
+import logic
 import Int
 
 -- Int successor (using recursor to avoid nested match)

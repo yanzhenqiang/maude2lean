@@ -1,6 +1,6 @@
 import Nat
 import Eq
-import True
+import logic
 
 -- =====================================================================
 -- Decimal integer system (Decimal: most significant digit first, intuitive notation)

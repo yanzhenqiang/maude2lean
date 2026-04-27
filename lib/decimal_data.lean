@@ -1,9 +1,17 @@
 import Decimal
 
--- Additional comparison functions (not defined in Decimal.lean)
+-- Tiny test list (3 elements)
+def tiny_t0 : Nat := 3
+def tiny_t1 : Nat := 1
+def tiny_t2 : Nat := 2
+
+def tiny_input_list : List Nat :=
+  cons Nat tiny_t0 (cons Nat tiny_t1 (cons Nat tiny_t2 (nil Nat)))
+
+-- Additional comparison helper
 def dec_le (a b : Decimal) : Bool := not (dec_lt b a)
 
--- Benchmark data
+-- Benchmark data (30 elements)
 def e0  : Decimal := nat_to_dec 3
 def e1  : Decimal := nat_to_dec 1
 def e2  : Decimal := nat_to_dec 4
