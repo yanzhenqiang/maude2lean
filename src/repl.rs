@@ -644,14 +644,13 @@ impl Repl {
                 self.tc_state = TypeCheckerState::new(self.env.clone());
 
                 // Register constructors and recursor in bindings
+                // Simple inductive uses bare constructor names (zero, succ).
+                // Namespacing is only needed for mutual inductive (Even.zero vs Odd.zero).
                 let info = self.env.find(&ind_name).unwrap();
                 if let Some(ind_val) = info.to_inductive_val() {
                     for ctor_name in &ind_val.ctors {
                         let cn = ctor_name.to_string();
                         self.env_bindings.insert(cn.clone(), Expr::mk_const(ctor_name.clone(), vec![]));
-                        // Also register namespaced alias: Type.ctor
-                        let namespaced = format!("{}.{}", name, cn);
-                        self.env_bindings.insert(namespaced, Expr::mk_const(ctor_name.clone(), vec![]));
                     }
                 }
 
