@@ -871,7 +871,7 @@ impl Repl {
         }
 
         // Handle tactic block
-        let (value_expr, introduced_vars, param_decl_indices) = match &value {
+        let (value_expr, introduced_vars, _param_decl_indices) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 if !is_theorem {
                     return Err("Tactic blocks are only allowed in theorems".to_string());
@@ -907,30 +907,49 @@ impl Repl {
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
         if is_tactic {
-            // For tactic blocks, the proof term contains FVars from the local context.
-            // Abstract them back to BVars and wrap with lambdas.
-            // Non-param hypotheses first (in reverse introduction order).
-            for (decl_idx, user_name, unique_name, ty) in introduced_vars.iter().rev() {
-                if param_decl_indices.contains(decl_idx) {
+            // Variables introduced via tactic_intro are tracked in introduced_vars.
+            // For theorems with forall in the return type (rather than in params),
+            // num_params may undercount. Compute total params from ret_ty Pi depth.
+            let total_params = if let Some(ref rt) = ret_ty {
+                let rt_expr = rt.to_expr(&self.env_bindings, &self.env, &mut bound_vars.clone());
+                let mut count = param_exprs.len();
+                let mut e = rt_expr;
+                while let Expr::Pi(_, _, _, body) = e {
+                    count += 1;
+                    e = (*body).clone();
+                }
+                count
+            } else {
+                param_exprs.len()
+            };
+            // Non-param hypotheses first (in reverse order): only abstract if still
+            // free in the proof term. Subgoal parameters (e.g., induction minor
+            // premises) have already been abstracted by tactic_exact/tactic_rfl.
+            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
+                if idx < total_params {
                     continue; // theorem params handled below
                 }
-                final_value = final_value.abstract_fvar(unique_name, 0);
-                final_value = Expr::Lambda(
-                    user_name.clone(),
-                    BinderInfo::Default,
-                    Rc::new(ty.clone()),
-                    Rc::new(final_value),
-                );
+                if final_value.contains_fvar(unique_name) {
+                    final_value = final_value.abstract_fvar(unique_name, 0);
+                    final_value = Expr::Lambda(
+                        user_name.clone(),
+                        BinderInfo::Default,
+                        Rc::new(ty.clone()),
+                        Rc::new(final_value),
+                    );
+                }
             }
-            // Theorem parameters (in reverse order).
-            for (pname, pty) in param_exprs.iter().rev() {
-                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
-                final_value = Expr::Lambda(
-                    Name::new(pname),
-                    BinderInfo::Default,
-                    Rc::new(pty.clone()),
-                    Rc::new(final_value),
-                );
+            // Theorem parameters (in reverse order): always wrap with lambdas.
+            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
+                if idx < total_params {
+                    final_value = final_value.abstract_fvar(unique_name, 0);
+                    final_value = Expr::Lambda(
+                        user_name.clone(),
+                        BinderInfo::Default,
+                        Rc::new(ty.clone()),
+                        Rc::new(final_value),
+                    );
+                }
             }
         } else {
             for (pname, pty) in param_exprs.iter().rev() {
@@ -1054,7 +1073,7 @@ impl Repl {
         let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
 
         // Handle tactic block for solve (like theorem does)
-        let (value_expr, introduced_vars, param_decl_indices) = match &value {
+        let (value_expr, introduced_vars, _param_decl_indices) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 let mut target_expr = ret_ty_expr.clone();
                 // Wrap target with parameter types as Pi binders
@@ -1086,28 +1105,44 @@ impl Repl {
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
         if is_tactic {
-            // For tactic blocks, the proof term contains FVars from the local context.
-            // Abstract them back to BVars and wrap with lambdas.
-            for (decl_idx, user_name, unique_name, ty) in introduced_vars.iter().rev() {
-                if param_decl_indices.contains(decl_idx) {
-                    continue;
+            // For solve with forall in the return type, compute total params from ret_ty Pi depth.
+            let total_params = {
+                let rt_expr = ret_ty_expr.clone();
+                let mut count = param_exprs.len();
+                let mut e = rt_expr;
+                while let Expr::Pi(_, _, _, body) = e {
+                    count += 1;
+                    e = (*body).clone();
                 }
-                final_value = final_value.abstract_fvar(unique_name, 0);
-                final_value = Expr::Lambda(
-                    user_name.clone(),
-                    BinderInfo::Default,
-                    Rc::new(ty.clone()),
-                    Rc::new(final_value),
-                );
+                count
+            };
+            // Non-param hypotheses first (in reverse order): only abstract if still
+            // free in the proof term.
+            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
+                if idx < total_params {
+                    continue; // solve params handled below
+                }
+                if final_value.contains_fvar(unique_name) {
+                    final_value = final_value.abstract_fvar(unique_name, 0);
+                    final_value = Expr::Lambda(
+                        user_name.clone(),
+                        BinderInfo::Default,
+                        Rc::new(ty.clone()),
+                        Rc::new(final_value),
+                    );
+                }
             }
-            for (pname, pty) in param_exprs.iter().rev() {
-                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
-                final_value = Expr::Lambda(
-                    Name::new(pname),
-                    BinderInfo::Default,
-                    Rc::new(pty.clone()),
-                    Rc::new(final_value),
-                );
+            // Solve parameters (in reverse order): always wrap with lambdas.
+            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
+                if idx < total_params {
+                    final_value = final_value.abstract_fvar(unique_name, 0);
+                    final_value = Expr::Lambda(
+                        user_name.clone(),
+                        BinderInfo::Default,
+                        Rc::new(ty.clone()),
+                        Rc::new(final_value),
+                    );
+                }
             }
         } else {
             for (pname, pty) in param_exprs.iter().rev() {

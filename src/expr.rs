@@ -466,6 +466,21 @@ impl Expr {
         }
     }
 
+    /// Check if the expression contains a specific free variable.
+    pub fn contains_fvar(&self, fvar_name: &Name) -> bool {
+        match self {
+            Expr::FVar(name) => name == fvar_name,
+            Expr::App(f, a) => f.contains_fvar(fvar_name) || a.contains_fvar(fvar_name),
+            Expr::Lambda(_, _, ty, body) |
+            Expr::Pi(_, _, ty, body) => ty.contains_fvar(fvar_name) || body.contains_fvar(fvar_name),
+            Expr::Let(_, ty, value, body, _) => {
+                ty.contains_fvar(fvar_name) || value.contains_fvar(fvar_name) || body.contains_fvar(fvar_name)
+            }
+            Expr::MData(_, e) | Expr::Proj(_, _, e) => e.contains_fvar(fvar_name),
+            _ => false,
+        }
+    }
+
     /// Abstract a free variable into a bound variable.
     /// Replace occurrences of `fvar_name` with `BVar(depth)` and lift existing BVars accordingly.
     pub fn abstract_fvar(&self, fvar_name: &Name, depth: u64) -> Expr {

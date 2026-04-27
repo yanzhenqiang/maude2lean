@@ -11,6 +11,13 @@ pub struct Goal {
     pub lctx: LocalCtx,
     pub target: Expr,
     pub mvar: Name,
+    /// Length of lctx when this goal was created. CDecls added after this
+    /// point are parameters of the subgoal and need lambda abstraction.
+    pub lctx_len_at_creation: usize,
+    /// Whether this subgoal needs CDecl abstraction when solved.
+    /// Set to true for induction minor premises, where the proof term
+    /// must be a function referencing subgoal-local variables.
+    pub needs_cdecl_abstraction: bool,
 }
 
 /// Lightweight tactic engine
@@ -51,7 +58,7 @@ impl<'a> TacticEngine<'a> {
             num_params: 0,
             param_decl_indices: std::collections::HashSet::new(),
         };
-        engine.push_goal(initial_target, LocalCtx::new());
+        engine.push_goal(initial_target, LocalCtx::new(), false);
         engine
     }
 
@@ -61,12 +68,15 @@ impl<'a> TacticEngine<'a> {
         Name::new(&format!("_tactic_mvar_{}", idx))
     }
 
-    fn push_goal(&mut self, target: Expr, lctx: LocalCtx) -> Name {
+    fn push_goal(&mut self, target: Expr, lctx: LocalCtx, needs_cdecl_abstraction: bool) -> Name {
         let mvar = self.fresh_mvar_name();
+        let lctx_len = lctx.len();
         self.goals.push(Goal {
             lctx,
             target,
             mvar: mvar.clone(),
+            lctx_len_at_creation: lctx_len,
+            needs_cdecl_abstraction,
         });
         mvar
     }
@@ -105,6 +115,26 @@ impl<'a> TacticEngine<'a> {
                     Rc::new(value.clone()),
                     Rc::new(result),
                     false,
+                );
+            }
+        }
+        result
+    }
+
+    /// Wrap proof with lambda abstractions for CDecls that were added after
+    /// the goal was created (i.e., subgoal parameters introduced via intro).
+    fn wrap_proof_with_cdecls(proof: &Expr, lctx: &LocalCtx, lctx_len_at_creation: usize) -> Expr {
+        let mut result = proof.clone();
+        let decls: Vec<_> = lctx.iter_decls().collect();
+        // Only abstract CDecls added after goal creation (index >= lctx_len_at_creation)
+        for decl in decls.iter().skip(lctx_len_at_creation).rev() {
+            if let LocalDecl::CDecl { name, user_name, ty, .. } = decl {
+                result = result.abstract_fvar(name, 0);
+                result = Expr::Lambda(
+                    user_name.clone(),
+                    BinderInfo::Default,
+                    Rc::new(ty.clone()),
+                    Rc::new(result),
                 );
             }
         }
@@ -233,7 +263,12 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        self.assign_mvar(&goal.mvar, proof.clone(), &goal.lctx);
+        let mut final_proof = proof.clone();
+        if goal.needs_cdecl_abstraction {
+            final_proof = Self::wrap_proof_with_cdecls(&final_proof, &goal.lctx, goal.lctx_len_at_creation);
+        }
+
+        self.assign_mvar(&goal.mvar, final_proof, &goal.lctx);
 
         Ok(())
     }
@@ -276,7 +311,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each premise (reversed so the first premise is the current goal)
         let mut subgoal_mvars: Vec<Expr> = Vec::new();
         for (idx, (_name, _bi, dom)) in premises.iter().enumerate().rev() {
-            let mvar_name = self.push_goal(dom.clone(), goal.lctx.clone());
+            let mvar_name = self.push_goal(dom.clone(), goal.lctx.clone(), false);
 
             // Create a lambda for the proof term
             let mvar_expr = Expr::mk_mvar(mvar_name.clone());
@@ -331,13 +366,17 @@ impl<'a> TacticEngine<'a> {
         }
 
         // Build refl proof: refl A a
-        let proof = Expr::mk_app(
+        let mut proof = Expr::mk_app(
             Expr::mk_app(
                 Expr::mk_const(Name::new("refl"), vec![]),
                 a_type,
             ),
             a,
         );
+
+        if goal.needs_cdecl_abstraction {
+            proof = Self::wrap_proof_with_cdecls(&proof, &goal.lctx, goal.lctx_len_at_creation);
+        }
 
         self.assign_mvar(&goal.mvar, proof, &goal.lctx);
 
@@ -430,7 +469,7 @@ impl<'a> TacticEngine<'a> {
 
         // Remove the induction variable from the local context for subgoals
         let mut subgoal_lctx = goal.lctx.clone();
-        if let Some(decl) = subgoal_lctx.find_local_decl(&var_name).cloned() {
+        if let Some(decl) = subgoal_lctx.find_local_decl_by_name(&var_name).cloned() {
             subgoal_lctx.clear(&decl);
         }
 
@@ -492,7 +531,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each minor premise (in reverse so first is current)
         let mut minor_mvars = Vec::new();
         for minor_ty in minor_types.iter().rev() {
-            let mvar_name = self.push_goal(minor_ty.clone(), subgoal_lctx.clone());
+            let mvar_name = self.push_goal(minor_ty.clone(), subgoal_lctx.clone(), true);
             minor_mvars.push(Expr::mk_mvar(mvar_name));
         }
 
@@ -587,7 +626,7 @@ impl<'a> TacticEngine<'a> {
 
         // Create a new goal: target with 'from' replaced by 'to'
         let new_target = replace_expr(&target, &from, &to);
-        let new_mvar = self.push_goal(new_target.clone(), goal.lctx.clone());
+        let new_mvar = self.push_goal(new_target.clone(), goal.lctx.clone(), false);
 
         // Build motive P = fun x => target[x/from]
         let motive_body = replace_expr(&target, &from, &Expr::mk_bvar(0));

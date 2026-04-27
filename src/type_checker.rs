@@ -348,20 +348,6 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Quick check if an expression could be a proof term.
-    /// Returns false for types (Sort, Pi) since they are not proofs.
-    /// Follows Lean 4's isProofQuick pattern.
-    fn is_proof_quick(&self, e: &Expr) -> bool {
-        match e {
-            Expr::Sort(_) => false,
-            Expr::Pi(_, _, _, _) => false,
-            Expr::Lambda(_, _, _, body) => self.is_proof_quick(body),
-            Expr::Let(_, _, _, body, _) => self.is_proof_quick(body),
-            Expr::MData(_, inner) => self.is_proof_quick(inner),
-            _ => true,
-        }
-    }
-
     /// Check if an expression inhabits a proposition (its type has type Prop/Sort(0)).
     /// For p : P, we check that P : Prop.
     fn is_prop_type(&mut self, e: &Expr) -> bool {
