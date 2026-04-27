@@ -33,6 +33,10 @@ pub enum ParsedExpr {
     TacticBlock(Vec<String>),
     /// Metavariable / solve variable: ?name
     MVar(String),
+    /// calc block: calc ty; lhs0 = rhs0 := proof0; rhs1 = rhs1 := proof1; ...
+    /// Each step is (lhs, rhs, proof). lhs of step i+1 must equal rhs of step i.
+    /// Desugars to nested eq_subst calls.
+    Calc(Box<ParsedExpr>, Vec<(ParsedExpr, ParsedExpr, ParsedExpr)>),
 }
 
 impl ParsedExpr {
@@ -104,6 +108,56 @@ impl ParsedExpr {
                 panic!("TacticBlock should be handled by the REPL, not converted directly to Expr")
             }
             ParsedExpr::MVar(name) => Expr::mk_mvar(Name::new(name)),
+            ParsedExpr::Calc(ty, steps) => {
+                if steps.is_empty() {
+                    panic!("calc block must have at least one step");
+                }
+                let ty_expr = ty.to_expr(env_bindings, env, bound_vars);
+                let first_lhs_parsed = &steps[0].0;
+                let mut result = steps[0].2.to_expr(env_bindings, env, bound_vars);
+                for i in 1..steps.len() {
+                    let prev_rhs = steps[i - 1].1.to_expr(env_bindings, env, bound_vars);
+                    let curr_rhs = steps[i].1.to_expr(env_bindings, env, bound_vars);
+                    let proof = steps[i].2.to_expr(env_bindings, env, bound_vars);
+                    // Build P = \y : ty . Eq ty first_lhs y
+                    let p_body = ParsedExpr::App(
+                        Box::new(ParsedExpr::App(
+                            Box::new(ParsedExpr::App(
+                                Box::new(ParsedExpr::Const("Eq".to_string())),
+                                Box::new((**ty).clone()),
+                            )),
+                            Box::new(first_lhs_parsed.clone()),
+                        )),
+                        Box::new(ParsedExpr::Const("y".to_string())),
+                    );
+                    bound_vars.push("y".to_string());
+                    let p_expr = p_body.to_expr(env_bindings, env, bound_vars);
+                    bound_vars.pop();
+                    let p_lambda = Expr::Lambda(Name::new("y"), BinderInfo::Default, Rc::new(ty_expr.clone()), Rc::new(p_expr));
+                    // eq_subst ty prev_rhs curr_rhs P proof result
+                    let eq_subst_call = Expr::mk_app(
+                        Expr::mk_app(
+                            Expr::mk_app(
+                                Expr::mk_app(
+                                    Expr::mk_app(
+                                        Expr::mk_app(
+                                            Expr::mk_const(Name::new("eq_subst"), vec![]),
+                                            ty_expr.clone(),
+                                        ),
+                                        prev_rhs,
+                                    ),
+                                    curr_rhs,
+                                ),
+                                p_lambda,
+                            ),
+                            proof,
+                        ),
+                        result,
+                    );
+                    result = eq_subst_call;
+                }
+                result
+            }
         }
     }
 
@@ -1246,7 +1300,8 @@ impl Parser {
                 || c == Some(':') || c == Some('=') || c == Some('|')
                 || (c == Some('-') && self.input.get(self.pos + 1) == Some(&'>'))
                 || c == Some('}') || c == Some('{')
-                || c == Some('+') || c == Some('-') || c == Some('*') {
+                || c == Some('+') || c == Some('-') || c == Some('*')
+                || c == Some('_') {
                 break;
             }
             // Keywords that end the application chain
@@ -1256,6 +1311,7 @@ impl Parser {
                 || self.starts_with_keyword("postulate") || self.starts_with_keyword("module")
                 || self.starts_with_keyword("solve")
                 || self.starts_with_keyword("notation")
+                || self.starts_with_keyword("calc")
                 || self.starts_with_keyword("infixl") || self.starts_with_keyword("infix")
                 || self.starts_with_keyword("if") || self.starts_with_keyword("then") || self.starts_with_keyword("else")
                 || self.starts_with_keyword("section") || self.starts_with_keyword("end")
@@ -1310,6 +1366,8 @@ impl Parser {
                     self.parse_forall()
                 } else if self.starts_with_keyword("exists") {
                     self.parse_exists()
+                } else if self.starts_with_keyword("calc") {
+                    self.parse_calc()
                 } else if self.starts_with_keyword("Type") {
                     self.advance_by(4);
                     Ok(ParsedExpr::Sort(1))
@@ -1574,6 +1632,93 @@ impl Parser {
                 (ParsedExpr::Const("false".to_string()), else_branch),
             ],
         ))
+    }
+
+    /// Parse calc block: calc (ty); a = b := h; b = c := h2; ...
+    /// Each line after the first can use `_` for the left-hand side (inferred from previous rhs).
+    /// Desugars to nested eq_subst calls.
+    fn parse_calc(&mut self) -> Result<ParsedExpr, String> {
+        self.advance_by(4); // consume "calc"
+        self.skip_whitespace();
+
+        // Type annotation must be parenthesized to avoid greedy parsing
+        if self.peek() != Some('(') {
+            return Err("Expected '(' after calc for type annotation".to_string());
+        }
+        self.advance();
+        let ty = self.parse_expr()?;
+        self.consume(')')?;
+
+        self.skip_whitespace();
+
+        // Parse steps: each step is "lhs = rhs := proof" or "_ = rhs := proof"
+        let mut steps = Vec::new();
+        let mut first_lhs: Option<ParsedExpr> = None;
+
+        loop {
+            self.skip_whitespace_and_comments();
+            // End of calc block: next token is a keyword or closing delimiter
+            if self.peek().is_none()
+                || self.starts_with_keyword("def")
+                || self.starts_with_keyword("theorem")
+                || self.starts_with_keyword("inductive")
+                || self.starts_with_keyword("where")
+                || self.starts_with_keyword("end")
+                || self.starts_with_keyword("in")
+                || self.starts_with_keyword("with")
+                || self.peek() == Some(')')
+                || self.peek() == Some('}')
+            {
+                break;
+            }
+
+            // Parse lhs (or _ for inferred)
+            let lhs = if self.peek() == Some('_') {
+                self.advance();
+                if first_lhs.is_none() {
+                    return Err("Cannot use '_' in the first calc step".to_string());
+                }
+                // Use previous rhs as lhs
+                steps.last().map(|(_, rhs, _): &(ParsedExpr, ParsedExpr, ParsedExpr)| rhs.clone()).unwrap()
+            } else {
+                let l = self.parse_expr()?;
+                if first_lhs.is_none() {
+                    first_lhs = Some(l.clone());
+                }
+                l
+            };
+
+            self.skip_whitespace();
+            if self.peek() != Some('=') {
+                return Err(format!("Expected '=' in calc step, got {:?}", self.peek()));
+            }
+            self.advance(); // consume '='
+
+            self.skip_whitespace();
+            let rhs = self.parse_expr()?;
+
+            self.skip_whitespace();
+            if self.peek() != Some(':') || self.input.get(self.pos + 1) != Some(&'=') {
+                return Err("Expected ':=' after calc step rhs".to_string());
+            }
+            self.advance_by(2); // consume ':='
+            self.skip_whitespace();
+            let proof = self.parse_expr()?;
+
+            steps.push((lhs, rhs, proof));
+
+            // Optional semicolon or newline separates steps
+            self.skip_whitespace();
+            if self.peek() == Some(';') {
+                self.advance();
+            }
+        }
+
+        if steps.is_empty() {
+            return Err("calc block must have at least one step".to_string());
+        }
+
+        Ok(ParsedExpr::Calc(Box::new(ty), steps))
     }
 
     /// Parse forall: forall (x : A), B  or  forall (x : A) -> B
@@ -2146,6 +2291,45 @@ mod tests {
                 let rem: String = p.input[p.pos..].iter().collect();
                 panic!("Parse error: {} at pos={} rem={:?}", e, p.pos, rem);
             }
+        }
+    }
+
+    #[test]
+    fn test_parse_calc_single_step() {
+        let e = parse("calc (Nat)\n  a = b := h");
+        match e {
+            ParsedExpr::Calc(ty, steps) => {
+                assert!(matches!(ty.as_ref(), ParsedExpr::Const(name) if name == "Nat"));
+                assert_eq!(steps.len(), 1);
+                assert!(matches!(&steps[0].0, ParsedExpr::Const(name) if name == "a"));
+                assert!(matches!(&steps[0].1, ParsedExpr::Const(name) if name == "b"));
+                assert!(matches!(&steps[0].2, ParsedExpr::Const(name) if name == "h"));
+            }
+            _ => panic!("Expected Calc, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_parse_calc_multi_step() {
+        let e = parse("calc (Nat)\n  a = b := h1\n  _ = c := h2\n  _ = d := h3");
+        match e {
+            ParsedExpr::Calc(ty, steps) => {
+                assert!(matches!(ty.as_ref(), ParsedExpr::Const(name) if name == "Nat"));
+                assert_eq!(steps.len(), 3);
+                // First step
+                assert!(matches!(&steps[0].0, ParsedExpr::Const(name) if name == "a"));
+                assert!(matches!(&steps[0].1, ParsedExpr::Const(name) if name == "b"));
+                assert!(matches!(&steps[0].2, ParsedExpr::Const(name) if name == "h1"));
+                // Second step (_ inferred as b)
+                assert!(matches!(&steps[1].0, ParsedExpr::Const(name) if name == "b"));
+                assert!(matches!(&steps[1].1, ParsedExpr::Const(name) if name == "c"));
+                assert!(matches!(&steps[1].2, ParsedExpr::Const(name) if name == "h2"));
+                // Third step (_ inferred as c)
+                assert!(matches!(&steps[2].0, ParsedExpr::Const(name) if name == "c"));
+                assert!(matches!(&steps[2].1, ParsedExpr::Const(name) if name == "d"));
+                assert!(matches!(&steps[2].2, ParsedExpr::Const(name) if name == "h3"));
+            }
+            _ => panic!("Expected Calc, got {:?}", e),
         }
     }
 }

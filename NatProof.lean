@@ -11,7 +11,12 @@ theorem nat_add_zero_right : forall (n : Nat), Eq Nat (nat_add n zero) n :=
     rec.Nat (fun x : Nat => Eq Nat (nat_add x zero) x)
       (refl Nat zero)
       (fun n' : Nat => fun ih : Eq Nat (nat_add n' zero) n' =>
-        eq_subst Nat (nat_add n' zero) n' (fun y : Nat => Eq Nat (succ (nat_add n' zero)) (succ y)) ih (refl Nat (succ (nat_add n' zero))))
+        calc (Nat)
+          succ (nat_add n' zero) = succ n' :=
+            eq_subst Nat (nat_add n' zero) n'
+              (\y : Nat . Eq Nat (succ (nat_add n' zero)) (succ y))
+              ih
+              (refl Nat (succ (nat_add n' zero))))
       n
 
 -- n + succ(m) = succ(n + m)
@@ -20,10 +25,12 @@ theorem nat_add_succ_right : forall (n : Nat) (m : Nat), Eq Nat (nat_add n (succ
     rec.Nat (fun x : Nat => Eq Nat (nat_add x (succ m)) (succ (nat_add x m)))
       (refl Nat (succ m))
       (fun n' : Nat => fun ih : Eq Nat (nat_add n' (succ m)) (succ (nat_add n' m)) =>
-        eq_subst Nat (nat_add n' (succ m)) (succ (nat_add n' m))
-          (fun y : Nat => Eq Nat (succ (nat_add n' (succ m))) (succ y))
-          ih
-          (refl Nat (succ (nat_add n' (succ m)))))
+        calc (Nat)
+          succ (nat_add n' (succ m)) = succ (succ (nat_add n' m)) :=
+            eq_subst Nat (nat_add n' (succ m)) (succ (nat_add n' m))
+              (\y : Nat . Eq Nat (succ (nat_add n' (succ m))) (succ y))
+              ih
+              (refl Nat (succ (nat_add n' (succ m)))))
       n
 
 -- m + n = n + m
@@ -32,10 +39,13 @@ theorem nat_add_comm : forall (m : Nat) (n : Nat), Eq Nat (nat_add m n) (nat_add
     rec.Nat (fun x : Nat => Eq Nat (nat_add x n) (nat_add n x))
       (eq_sym Nat (nat_add n zero) n (nat_add_zero_right n))
       (fun m' : Nat => fun ih : Eq Nat (nat_add m' n) (nat_add n m') =>
-        eq_subst Nat (nat_add n m') (nat_add m' n)
-          (fun y : Nat => Eq Nat (succ y) (nat_add n (succ m')))
-          (eq_sym Nat (nat_add m' n) (nat_add n m') ih)
-          (eq_sym Nat (nat_add n (succ m')) (succ (nat_add n m')) (nat_add_succ_right n m')))
+        calc (Nat)
+          succ (nat_add m' n) = succ (nat_add n m') :=
+            eq_subst Nat (nat_add m' n) (nat_add n m')
+              (\y : Nat . Eq Nat (succ (nat_add m' n)) (succ y))
+              ih
+              (refl Nat (succ (nat_add m' n)))
+          _ = nat_add n (succ m') := eq_sym Nat (nat_add n (succ m')) (succ (nat_add n m')) (nat_add_succ_right n m'))
       m
 
 -- le n n (自反性)
@@ -57,10 +67,13 @@ theorem nat_add_assoc : forall (a : Nat) (b : Nat) (c : Nat),
     rec.Nat (fun x : Nat => Eq Nat (nat_add (nat_add x b) c) (nat_add x (nat_add b c)))
       (refl Nat (nat_add b c))
       (fun a' : Nat => fun ih : Eq Nat (nat_add (nat_add a' b) c) (nat_add a' (nat_add b c)) =>
-        eq_subst Nat (nat_add (nat_add a' b) c) (nat_add a' (nat_add b c))
-          (fun y : Nat => Eq Nat (succ (nat_add (nat_add a' b) c)) (succ y))
-          ih
-          (refl Nat (succ (nat_add (nat_add a' b) c))))
+        calc (Nat)
+          succ (nat_add (nat_add a' b) c) = succ (nat_add a' (nat_add b c)) :=
+            eq_subst Nat (nat_add (nat_add a' b) c) (nat_add a' (nat_add b c))
+              (\y : Nat . Eq Nat (succ (nat_add (nat_add a' b) c)) (succ y))
+              ih
+              (refl Nat (succ (nat_add (nat_add a' b) c)))
+          _ = nat_add (succ a') (nat_add b c) := refl Nat (succ (nat_add a' (nat_add b c))))
       a
 
 -- m * 0 = 0
@@ -69,10 +82,9 @@ theorem nat_mul_zero_right : forall (m : Nat), Eq Nat (nat_mul m zero) zero :=
     rec.Nat (fun x : Nat => Eq Nat (nat_mul x zero) zero)
       (refl Nat zero)
       (fun m' : Nat => fun ih : Eq Nat (nat_mul m' zero) zero =>
-        eq_subst Nat (nat_mul m' zero) zero
-          (fun y : Nat => Eq Nat (nat_add (nat_mul m' zero) zero) y)
-          ih
-          (nat_add_zero_right (nat_mul m' zero)))
+        calc (Nat)
+          nat_add (nat_mul m' zero) zero = nat_mul m' zero := nat_add_zero_right (nat_mul m' zero)
+          _ = zero := ih)
       m
 
 -- m * succ(n) = m + m * n
