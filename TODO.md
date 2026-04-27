@@ -13,6 +13,7 @@
 ## Future Mathematical Libraries
 
 - **Euclidean Geometry Axiom System**: Define axioms for Euclidean geometry (points, lines, incidence, betweenness, congruence) following Hilbert or Tarski. Build toward proving classic theorems (e.g., sum of angles in a triangle).
+  - **Status**: Initial framework complete in `lib/Geometry.cic`. Includes Hilbert-style axioms (I1-I3 incidence, O1-O4 order, C1-C5 congruence, Playfair parallel), basic definitions (collinear, segment, triangle, ray, midpoint, isosceles, equilateral), and sample theorems (between_implies_collinear, parallel_sym, parallel_through construction via choice).
 
 ## Visualization / UX
 

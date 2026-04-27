@@ -529,10 +529,6 @@ def nat_le (m n : Nat) : Bool := not (nat_gt m n)
 -- 20. Proof infrastructure
 -- -----------------------------------------------------------------
 
--- Logical conjunction
-inductive And (P : Prop) (Q : Prop) : Prop where
-| conj : P -> Q -> And P Q
-
 -- Nat list sorted predicate (recursive definition, avoids indexed inductive case limitations)
 def SortedNat (xs : List Nat) : Prop :=
   rec.List Nat (fun _ => Prop) True
@@ -616,13 +612,6 @@ def is_sorted (xs : List Nat) : Bool :=
       xs)
     xs
 
-
--- And projection
-def and_fst (P Q : Prop) (h : And P Q) : P :=
-  rec.And P Q (fun _ => P) (fun p q => p) h
-
-def and_snd (P Q : Prop) (h : And P Q) : Q :=
-  rec.And P Q (fun _ => Q) (fun p q => q) h
 
 -- All elements <= pivot
 def AllLeNat (pivot : Nat) (xs : List Nat) : Prop :=

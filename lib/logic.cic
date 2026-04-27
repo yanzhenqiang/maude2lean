@@ -11,3 +11,14 @@ inductive Or (A : Prop) (B : Prop) : Prop where
 
 -- Negation
 def Not (A : Prop) : Prop := A -> False
+
+-- Logical conjunction
+inductive And (P : Prop) (Q : Prop) : Prop where
+| conj : P -> Q -> And P Q
+
+-- And projections
+def and_fst (P : Prop) (Q : Prop) (h : And P Q) : P :=
+  rec.And P Q (fun _ => P) (fun p q => p) h
+
+def and_snd (P : Prop) (Q : Prop) (h : And P Q) : Q :=
+  rec.And P Q (fun _ => Q) (fun p q => q) h
