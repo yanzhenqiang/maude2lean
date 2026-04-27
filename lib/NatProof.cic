@@ -1,9 +1,13 @@
 -- Natural number arithmetic lemmas
--- Dependencies: Nat.lean, Eq.lean
+-- Dependencies: Nat.cic, Eq.cic, Order.cic
 
 import Nat
 import Eq
 import Order
+
+-- =====================================================================
+-- 1. Addition lemmas
+-- =====================================================================
 
 -- n + 0 = n
 theorem nat_add_zero_right : forall (n : Nat), Eq Nat (nat_add n zero) n :=
@@ -48,18 +52,6 @@ theorem nat_add_comm : forall (m : Nat) (n : Nat), Eq Nat (nat_add m n) (nat_add
           _ = nat_add n (succ m') := eq_sym Nat (nat_add n (succ m')) (succ (nat_add n m')) (nat_add_succ_right n m'))
       m
 
--- le n n (reflexivity)
-theorem le_refl : forall (n : Nat), le n n :=
-  fun n : Nat =>
-    rec.Nat (fun x : Nat => le x x)
-      (le_zero zero)
-      (fun n' : Nat => fun ih : le n' n' => le_succ n' n' ih)
-      n
-
--- gt (succ n) n
-theorem gt_succ : forall (n : Nat), gt (succ n) n :=
-  fun n : Nat => le_succ n n (le_refl n)
-
 -- (a + b) + c = a + (b + c)
 theorem nat_add_assoc : forall (a : Nat) (b : Nat) (c : Nat),
   Eq Nat (nat_add (nat_add a b) c) (nat_add a (nat_add b c)) :=
@@ -75,6 +67,27 @@ theorem nat_add_assoc : forall (a : Nat) (b : Nat) (c : Nat),
               (refl Nat (succ (nat_add (nat_add a' b) c)))
           _ = nat_add (succ a') (nat_add b c) := refl Nat (succ (nat_add a' (nat_add b c))))
       a
+
+-- =====================================================================
+-- 2. Ordering lemmas
+-- =====================================================================
+
+-- le n n (reflexivity)
+theorem le_refl : forall (n : Nat), le n n := by
+  intro n
+  induction n
+  exact le_zero zero
+  intro n' ih
+  exact le_succ n' n' ih
+
+-- gt (succ n) n
+theorem gt_succ : forall (n : Nat), gt (succ n) n := by
+  intro n
+  exact le_succ n n (le_refl n)
+
+-- =====================================================================
+-- 3. Multiplication lemmas
+-- =====================================================================
 
 -- m * 0 = 0
 theorem nat_mul_zero_right : forall (m : Nat), Eq Nat (nat_mul m zero) zero :=

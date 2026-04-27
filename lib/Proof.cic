@@ -1,7 +1,11 @@
 import Nat
 
-theorem const_nat : forall (n : Nat), Nat -> Nat :=
-  fun n : Nat => fun m : Nat => n
+-- Constant function: returns first argument
+theorem const_nat : forall (n : Nat), Nat -> Nat := by
+  intro n m
+  exact n
 
-theorem id_nat : forall (n : Nat), Nat -> Nat :=
-  fun n : Nat => fun m : Nat => m
+-- Identity function on Nat
+theorem id_nat : forall (n : Nat), Nat -> Nat := by
+  intro n m
+  exact m

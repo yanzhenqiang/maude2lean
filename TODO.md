@@ -6,6 +6,10 @@
 - **Reduce hardcoding in Rust**: Constructor names like `Eq.refl`, `Nat.zero`, `Nat.succ` are hardcoded in tactic.rs and repl_parser.rs. Consider a registry-driven approach where the kernel exposes constructor metadata so the parser/tactic engine doesn't need string constants.
 - **Clean up `to_expr` namespace resolution**: The bare-name-to-namespaced fallback in `repl_parser.rs` works but could be more principled with a dedicated name-resolution pass.
 
+## Known Issues
+
+- **Match-based recursive definitions cause segfault in batch mode**: When `Nat.cic` or `Int.cic` use `match` for recursive definitions (`nat_add`, `nat_mul`, `int_add`), type-checking deeply nested proofs in downstream files (e.g., `NatProof.cic`) triggers a segfault. This appears to be a state contamination or stack-overflow issue in the type checker when processing match-desugared recursor expressions. Currently reverted to hand-written `rec.Nat`/`rec.Int` in those files.
+
 ## Future Mathematical Libraries
 
 - **Euclidean Geometry Axiom System**: Define axioms for Euclidean geometry (points, lines, incidence, betweenness, congruence) following Hilbert or Tarski. Build toward proving classic theorems (e.g., sum of angles in a triangle).
