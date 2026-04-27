@@ -1,0 +1,16 @@
+import Nat
+import Eq
+import Order
+
+theorem nat_add_zero_right : forall (n : Nat), Eq Nat (nat_add n zero) n :=
+  fun n : Nat =>
+    rec.Nat (fun x : Nat => Eq Nat (nat_add x zero) x)
+      (refl Nat zero)
+      (fun n' : Nat => fun ih : Eq Nat (nat_add n' zero) n' =>
+        calc (Nat)
+          succ (nat_add n' zero) = succ n' :=
+            eq_subst Nat (nat_add n' zero) n'
+              (\y : Nat . Eq Nat (succ (nat_add n' zero)) (succ y))
+              ih
+              (refl Nat (succ (nat_add n' zero))))
+      n

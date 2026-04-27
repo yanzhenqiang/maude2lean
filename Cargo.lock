@@ -114,14 +114,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lean-cauchy-kernel"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "indexmap",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.185"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,6 +288,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tinycic"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "indexmap",
 ]
 
 [[package]]

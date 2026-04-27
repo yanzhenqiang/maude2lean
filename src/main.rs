@@ -16,14 +16,14 @@ fn main() {
         }
         "check-files" => {
             if args.len() < 3 {
-                eprintln!("Usage: {} check-files <file1.lean> [file2.lean] ...", args[0]);
+                eprintln!("Usage: {} check-files <file1.cic> [file2.cic] ...", args[0]);
                 std::process::exit(1);
             }
             run_check_files(&args[2..]);
         }
         "tui" => {
             if args.len() < 3 {
-                eprintln!("Usage: {} tui <target.lean> [dep1.lean dep2.lean ...]", args[0]);
+                eprintln!("Usage: {} tui <target.cic> [dep1.cic dep2.cic ...]", args[0]);
                 std::process::exit(1);
             }
             run_tui(&args[2..]);
@@ -41,20 +41,20 @@ fn print_usage(prog: &str) {
     eprintln!("Commands:");
     eprintln!("  lean-check                   Run Lean kernel type checker tests");
     eprintln!("  repl                         Start interactive Lean REPL");
-    eprintln!("  check-files <file>...        Batch check .lean files");
+    eprintln!("  check-files <file>...        Batch check .cic files");
     eprintln!("  tui <target> [deps...]       Interactive TUI goal viewer");
 }
 
 fn run_repl() {
-    let mut repl = lean_cauchy_kernel::repl::Repl::new();
+    let mut repl = tinycic::repl::Repl::new();
     repl.run();
 }
 
 fn run_lean_check() {
-    use lean_cauchy_kernel::declaration::*;
-    use lean_cauchy_kernel::environment::Environment;
-    use lean_cauchy_kernel::expr::*;
-    use lean_cauchy_kernel::type_checker::{TypeChecker, TypeCheckerState};
+    use tinycic::declaration::*;
+    use tinycic::environment::Environment;
+    use tinycic::expr::*;
+    use tinycic::type_checker::{TypeChecker, TypeCheckerState};
     use std::rc::Rc;
 
     let line = "═══════════════════════════════════════════════════════════════════════";
@@ -214,7 +214,7 @@ fn run_lean_check() {
 }
 
 fn run_check_files(files: &[String]) {
-    let mut repl = lean_cauchy_kernel::repl::Repl::new();
+    let mut repl = tinycic::repl::Repl::new();
     match repl.check_files(&files.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
         Ok(()) => println!("OK"),
         Err(e) => {
@@ -241,7 +241,7 @@ fn run_tui(args: &[String]) {
     let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Load dependencies via Repl
-    let mut repl = lean_cauchy_kernel::repl::Repl::new();
+    let mut repl = tinycic::repl::Repl::new();
     repl.set_quiet(true);
     if !deps.is_empty() {
         match repl.check_files(&deps.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
@@ -261,15 +261,15 @@ fn run_tui(args: &[String]) {
         }
     }
 
-    let mut app = lean_cauchy_kernel::tui::TuiApp::new(repl, lines);
+    let mut app = tinycic::tui::TuiApp::new(repl, lines);
     if let Err(e) = app.run() {
         eprintln!("TUI error: {}", e);
         std::process::exit(1);
     }
 }
 
-fn format_expr(e: &lean_cauchy_kernel::expr::Expr) -> String {
-    use lean_cauchy_kernel::expr::*;
+fn format_expr(e: &tinycic::expr::Expr) -> String {
+    use tinycic::expr::*;
     match e {
         Expr::BVar(n) => format!("x{}", n),
         Expr::Const(name, _) => name.to_string(),

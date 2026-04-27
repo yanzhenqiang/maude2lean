@@ -1,0 +1,8 @@
+import Nat
+import Eq
+
+-- Minimal test: single parameter and single equality
+theorem test_rw_simple : forall (a b : Nat), Eq Nat a b -> Eq Nat b a := by
+  intro a b h
+  rw [←h]
+  rfl

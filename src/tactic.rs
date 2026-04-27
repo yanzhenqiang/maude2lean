@@ -25,8 +25,8 @@ pub struct TacticEngine<'a> {
     /// MVar assignments accumulated during tactic execution
     pub mvar_assignments: HashMap<Name, Expr>,
     /// Variables introduced by tactic_intro, in order (outermost first).
-    /// Each entry is (local_decl_index, fvar_name, type).
-    pub introduced_vars: Vec<(u64, Name, Expr)>,
+    /// Each entry is (local_decl_index, user_name, unique_name, type).
+    pub introduced_vars: Vec<(u64, Name, Name, Expr)>,
     /// Number of theorem parameters (first N intros correspond to params)
     pub num_params: usize,
     /// Local decl indices of theorem parameters that have been intro'd
@@ -193,21 +193,25 @@ impl<'a> TacticEngine<'a> {
 
         match &target_whnf {
             Expr::Pi(_, _, dom, body) => {
-                let fvar_name = Name::new(name);
-                let fvar = Expr::mk_fvar(fvar_name.clone());
+                let user_name = Name::new(name);
                 let decl_index = {
                     let goal = self.current_goal_mut().ok_or("No goals remaining")?;
-                    let decl = goal.lctx.mk_local_decl(fvar_name.clone(), Name::new(name), (**dom).clone(), BinderInfo::Default);
+                    let decl = goal.lctx.mk_local_decl(user_name.clone(), user_name.clone(), (**dom).clone(), BinderInfo::Default);
+                    let unique_name = decl.get_name().clone();
+                    let fvar = Expr::mk_fvar(unique_name.clone());
                     let idx = decl.get_index();
                     goal.target = body.instantiate(&fvar);
                     idx
                 };
+                let goal = self.current_goal().ok_or("No goals remaining")?;
+                let decl = goal.lctx.find_local_decl(&user_name).ok_or("Introduced decl not found")?;
+                let unique_name = decl.get_name().clone();
 
                 // If this intro corresponds to a theorem parameter, record its index
                 if self.introduced_vars.len() < self.num_params {
                     self.param_decl_indices.insert(decl_index);
                 }
-                self.introduced_vars.push((decl_index, fvar_name, (**dom).clone()));
+                self.introduced_vars.push((decl_index, user_name, unique_name, (**dom).clone()));
                 Ok(())
             }
             _ => Err(format!("tactic_intro: target is not a Pi type: {}", format_expr(&target_whnf))),

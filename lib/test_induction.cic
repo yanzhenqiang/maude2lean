@@ -1,0 +1,10 @@
+import Nat
+import Eq
+
+theorem test_ind (n : Nat) : Eq Nat n n := by
+  intro n
+  induction n
+  rfl
+  intro n
+  intro ih
+  rfl

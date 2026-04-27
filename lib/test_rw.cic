@@ -1,0 +1,20 @@
+import Nat
+import Eq
+
+-- Test chained rewriting: rw [h1, h2, h3]
+theorem test_rw_chain : forall (a b c d : Nat), Eq Nat a b -> Eq Nat b c -> Eq Nat c d -> Eq Nat a d := by
+  intro a b c d h1 h2 h3
+  rw [h1, h2, h3]
+  rfl
+
+-- Test reverse rewriting: rw [←h]
+theorem test_rw_rev : forall (a b : Nat), Eq Nat a b -> Eq Nat b a := by
+  intro a b h
+  rw [←h]
+  rfl
+
+-- Test mixed rewriting: rw [h1, h2]
+theorem test_rw_mixed : forall (a b c : Nat), Eq Nat a b -> Eq Nat b c -> Eq Nat c a := by
+  intro a b c h1 h2
+  rw [h1, h2]
+  rfl

@@ -1,0 +1,5 @@
+import Nat
+
+notation "ℕ" => Nat
+
+def test1 : ℕ := zero

@@ -13,7 +13,7 @@ use std::rc::Rc;
 ///
 /// Commands:
 ///   :env                          Show current environment
-///   :load <file.lean>             Load declarations from a file
+///   :load <file.cic>             Load declarations from a file
 ///   :axiom <name> : <type>        Add an axiom
 ///   :def <name> := <value>        Add a definition (type inferred)
 ///   :def <name> : <type> := <value>  Add a definition with explicit type
@@ -241,7 +241,7 @@ impl Repl {
         println!("╚═══════════════════════════════════════════════════════════════════════╝");
         println!();
 
-        // Pre-populate with axioms only (Nat/Exists/Eq must be defined in .lean files)
+        // Pre-populate with axioms only (Nat/Exists/Eq must be defined in .cic files)
         println!("Pre-loaded: propext, choice");
         println!();
         self.load_axioms();
@@ -368,11 +368,11 @@ impl Repl {
     }
 
     fn process_import(&mut self, path: String) -> Result<(), String> {
-        let mut filepath = format!("{}.lean", path);
+        let mut filepath = format!("{}.cic", path);
 
         // If not found in current directory, try lib/
         if !std::path::Path::new(&filepath).exists() {
-            let alt = format!("lib/{}.lean", path);
+            let alt = format!("lib/{}.cic", path);
             if std::path::Path::new(&alt).exists() {
                 filepath = alt;
             }
@@ -910,13 +910,13 @@ impl Repl {
             // For tactic blocks, the proof term contains FVars from the local context.
             // Abstract them back to BVars and wrap with lambdas.
             // Non-param hypotheses first (in reverse introduction order).
-            for (decl_idx, fvar_name, ty) in introduced_vars.iter().rev() {
+            for (decl_idx, user_name, unique_name, ty) in introduced_vars.iter().rev() {
                 if param_decl_indices.contains(decl_idx) {
                     continue; // theorem params handled below
                 }
-                final_value = final_value.abstract_fvar(fvar_name, 0);
+                final_value = final_value.abstract_fvar(unique_name, 0);
                 final_value = Expr::Lambda(
-                    fvar_name.clone(),
+                    user_name.clone(),
                     BinderInfo::Default,
                     Rc::new(ty.clone()),
                     Rc::new(final_value),
@@ -1088,13 +1088,13 @@ impl Repl {
         if is_tactic {
             // For tactic blocks, the proof term contains FVars from the local context.
             // Abstract them back to BVars and wrap with lambdas.
-            for (decl_idx, fvar_name, ty) in introduced_vars.iter().rev() {
+            for (decl_idx, user_name, unique_name, ty) in introduced_vars.iter().rev() {
                 if param_decl_indices.contains(decl_idx) {
                     continue;
                 }
-                final_value = final_value.abstract_fvar(fvar_name, 0);
+                final_value = final_value.abstract_fvar(unique_name, 0);
                 final_value = Expr::Lambda(
-                    fvar_name.clone(),
+                    user_name.clone(),
                     BinderInfo::Default,
                     Rc::new(ty.clone()),
                     Rc::new(final_value),
@@ -1458,7 +1458,7 @@ impl Repl {
     fn print_help(&self) {
         println!("Commands:");
         println!("  :env                          Show current environment");
-        println!("  :load <file.lean>             Load declarations from a file");
+        println!("  :load <file.cic>             Load declarations from a file");
         println!("  :axiom <name> : <type>        Add an axiom");
         println!("  :def <name> := <value>        Add a definition");
         println!("  :def <name> : <type> := <val> Add a definition with type");
@@ -1575,8 +1575,8 @@ fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, in
 fn resolve_tactic_vars(expr: &Expr, engine: &TacticEngine) -> Expr {
     match expr {
         Expr::Const(name, _) => {
-            if engine.current_goal().map_or(false, |g| g.lctx.find_local_decl(name).is_some()) {
-                Expr::mk_fvar(name.clone())
+            if let Some(decl) = engine.current_goal().and_then(|g| g.lctx.find_local_decl(name)) {
+                Expr::mk_fvar(decl.get_name().clone())
             } else {
                 expr.clone()
             }
@@ -1717,7 +1717,16 @@ fn execute_tactic(
                 return Err("induction requires a variable name".to_string());
             }
             let var_name = rest.trim();
-            let var_expr = Expr::mk_fvar(Name::new(var_name));
+            let user_name = Name::new(var_name);
+            let var_expr = if let Some(goal) = engine.current_goal() {
+                if let Some(decl) = goal.lctx.find_local_decl(&user_name) {
+                    Expr::mk_fvar(decl.get_name().clone())
+                } else {
+                    Expr::mk_fvar(user_name)
+                }
+            } else {
+                Expr::mk_fvar(user_name)
+            };
             engine.tactic_induction(&var_expr)
         }
         "have" => {

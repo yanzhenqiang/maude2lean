@@ -224,18 +224,19 @@ impl<'a> TypeChecker<'a> {
                 self.ensure_sort(&ty_type)?;
 
                 // Create a fresh FVar for the binder and substitute BVar(0)
-                let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
                 let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
-                new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
-                new_lctx.push_bvar(name.clone(), (**ty).clone());
+                let decl = new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
+                let unique_name = decl.get_name().clone();
+                let fvar = Expr::mk_fvar(unique_name.clone());
+                new_lctx.push_bvar(unique_name.clone(), (**ty).clone());
 
                 let body_inst = body.instantiate(&fvar);
                 let mut tc = TypeChecker::with_local_ctx(self.st, new_lctx);
                 let body_type = tc.infer(&body_inst)?;
 
                 // Abstract the FVar back to a bound variable in the Pi body
-                let body_type_abstracted = body_type.abstract_fvar(name, 0);
+                let body_type_abstracted = body_type.abstract_fvar(&unique_name, 0);
 
                 Ok(Expr::Pi(name.clone(), *bi, ty.clone(), Rc::new(body_type_abstracted)))
             }
@@ -244,11 +245,12 @@ impl<'a> TypeChecker<'a> {
                 let ty_level = self.ensure_sort(&ty_type)?;
                 let ty_u = self.sort_level(&ty_level)?;
 
-                let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
                 let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
-                new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
-                new_lctx.push_bvar(name.clone(), (**ty).clone());
+                let decl = new_lctx.mk_local_decl(name.clone(), name.clone(), converted_ty, *bi);
+                let unique_name = decl.get_name().clone();
+                let fvar = Expr::mk_fvar(unique_name.clone());
+                new_lctx.push_bvar(unique_name.clone(), (**ty).clone());
 
                 let body_u = {
                     let body_inst = body.instantiate(&fvar);
@@ -271,12 +273,13 @@ impl<'a> TypeChecker<'a> {
                 self.ensure_sort(&ty_type)?;
                 self.check(value, ty)?;
 
-                let fvar = Expr::mk_fvar(name.clone());
                 let mut new_lctx = self.lctx.clone();
                 let converted_ty = new_lctx.replace_bvars_with_fvars(&ty);
                 let converted_value = new_lctx.replace_bvars_with_fvars(&value);
-                new_lctx.mk_let_decl(name.clone(), name.clone(), converted_ty, converted_value);
-                new_lctx.push_bvar(name.clone(), (**ty).clone());
+                let decl = new_lctx.mk_let_decl(name.clone(), name.clone(), converted_ty, converted_value);
+                let unique_name = decl.get_name().clone();
+                let fvar = Expr::mk_fvar(unique_name.clone());
+                new_lctx.push_bvar(unique_name.clone(), (**ty).clone());
 
                 let body_inst = body.instantiate(&fvar);
                 let mut tc = TypeChecker::with_local_ctx(self.st, new_lctx);
@@ -787,10 +790,11 @@ impl<'a> TypeChecker<'a> {
                 }
                 // Use a single fresh variable for both sides (standard approach)
                 let fresh_name = Name::new(&format!("_fresh_{}", self.lctx.len()));
-                let fresh = Expr::mk_fvar(fresh_name.clone());
                 let converted_ty = self.lctx.replace_bvars_with_fvars(tty1);
                 let fresh_decl = self.lctx.mk_local_decl(fresh_name.clone(), fresh_name.clone(), converted_ty, *bi1);
-                self.lctx.push_bvar(fresh_name.clone(), (**tty1).clone());
+                let unique_name = fresh_decl.get_name().clone();
+                let fresh = Expr::mk_fvar(unique_name.clone());
+                self.lctx.push_bvar(unique_name.clone(), (**tty1).clone());
 
                 let t_body_inst = tbody1.instantiate(&fresh);
                 let s_body_inst = sbody1.instantiate(&fresh);
