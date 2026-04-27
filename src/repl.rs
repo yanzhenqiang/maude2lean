@@ -203,6 +203,13 @@ impl Repl {
 
     pub fn check_files(&mut self, files: &[&str]) -> Result<(), String> {
         for filepath in files {
+            // Skip if already loaded (e.g., via import from an earlier file)
+            if self.loaded_files.contains(*filepath) {
+                if !self.quiet {
+                    println!("  Skip: {} (already loaded)", filepath);
+                }
+                continue;
+            }
             // Track this file so imports won't reload it
             self.loaded_files.insert(filepath.to_string());
             // Clear file-scoped state for each new file

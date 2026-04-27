@@ -1,4 +1,5 @@
-
+import Decimal
+import NatProof
 
 def list_count (A : Type) (eq : A -> A -> Bool) (x : A) (xs : List A) : Nat :=
   rec.List A (fun _ => Nat)
@@ -24,10 +25,10 @@ def count_cons_neq (x y : Nat) (xs : List Nat) (h : Eq Bool (nat_eq x y) false)
 
 
 theorem nat_add_zero_r (m : Nat) : Eq Nat (nat_add m zero) m :=
-  refl Nat m
+  nat_add_zero_right m
 
 theorem nat_add_succ_r (m n : Nat) : Eq Nat (nat_add m (succ n)) (succ (nat_add m n)) :=
-  refl Nat (succ (nat_add m n))
+  nat_add_succ_right m n
 
 def nat_add_succ_l (m n : Nat) : Eq Nat (nat_add (succ m) n) (succ (nat_add m n)) :=
   rec.Nat (fun n => Eq Nat (nat_add (succ m) n) (succ (nat_add m n)))
@@ -38,17 +39,6 @@ def nat_add_succ_l (m n : Nat) : Eq Nat (nat_add (succ m) n) (succ (nat_add m n)
         ih
         (refl Nat (succ (nat_add (succ m) n'))))
     n
-
-def nat_add_comm (m n : Nat) : Eq Nat (nat_add m n) (nat_add n m) :=
-  rec.Nat (fun x => Eq Nat (nat_add x n) (nat_add n x))
-    (eq_sym Nat (nat_add n zero) n (nat_add_zero_r n))
-    (fun m' : Nat => fun ih : Eq Nat (nat_add m' n) (nat_add n m') =>
-      eq_subst Nat (nat_add n m') (nat_add m' n)
-        (fun y => Eq Nat (succ y) (nat_add n (succ m')))
-        (eq_sym Nat (nat_add m' n) (nat_add n m') ih)
-        (eq_sym Nat (nat_add n (succ m')) (succ (nat_add n m')) (nat_add_succ_r n m')))
-    m
-
 
 def count_append (x : Nat) (xs ys : List Nat)
   : Eq Nat (list_count Nat nat_eq x (list_append Nat xs ys))

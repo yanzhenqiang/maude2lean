@@ -2,6 +2,10 @@
 -- 例子: x² - 2x - 3 = 0
 -- 依赖: Nat, Int, IntOrder, Frac, Algebra, Eq
 
+import Frac
+import Algebra
+import Eq
+
 -- =====================================================================
 -- 1. 定义方程系数
 -- =====================================================================
@@ -39,23 +43,23 @@ solve step2 : Eq Frac (frac_add (square (nat_to_frac 3)) (frac_mul b (nat_to_fra
 def half_b_over_a := frac_div b (frac_mul (nat_to_frac 2) a)
 
 -- 验证半系数等于 -1
-solve step3_half : Eq Frac half_b_over_a (frac_neg (nat_to_frac 1)) := refl Frac (frac_neg (nat_to_frac 1))
+def step3_half : Eq Frac half_b_over_a (frac_neg (nat_to_frac 1)) := refl Frac (frac_neg (nat_to_frac 1))
 
 -- 定义配方常数
 def complete_sq_term := square half_b_over_a
 
 -- 验证配方常数等于 1
-solve step3_term : Eq Frac complete_sq_term (nat_to_frac 1) := refl Frac (nat_to_frac 1)
+def step3_term : Eq Frac complete_sq_term (nat_to_frac 1) := refl Frac (nat_to_frac 1)
 
 -- 步骤4: 两边加配方常数
 -- x² - 2x + 1 = 3 + 1 = 4
 -- 验证: 左边在 x=3 时: 9 - 6 + 1 = 4
-solve step4_left : Eq Frac (frac_add (frac_add (square (nat_to_frac 3)) (frac_mul b (nat_to_frac 3))) complete_sq_term) (nat_to_frac 4) := refl Frac (nat_to_frac 4)
+def step4_left : Eq Frac (frac_add (frac_add (square (nat_to_frac 3)) (frac_mul b (nat_to_frac 3))) complete_sq_term) (nat_to_frac 4) := refl Frac (nat_to_frac 4)
 
 -- 步骤5: 左边写成完全平方
 -- (x + b/2a)² = (x - 1)²
 -- 验证: (3 - 1)² = 4
-solve step5_sq : Eq Frac (square (frac_add (nat_to_frac 3) half_b_over_a)) (nat_to_frac 4) := refl Frac (nat_to_frac 4)
+def step5_sq : Eq Frac (square (frac_add (nat_to_frac 3) half_b_over_a)) (nat_to_frac 4) := refl Frac (nat_to_frac 4)
 
 -- =====================================================================
 -- 4. 判别式与求根公式
@@ -75,20 +79,20 @@ def sqrt_disc := nat_to_frac 4
 def root_pos := frac_div (frac_add (frac_neg b) sqrt_disc) (frac_mul (nat_to_frac 2) a)
 
 -- 验证正根等于 3
-solve verify_root_pos : Eq Frac root_pos (nat_to_frac 3) := refl Frac (nat_to_frac 3)
+def verify_root_pos : Eq Frac root_pos (nat_to_frac 3) := refl Frac (nat_to_frac 3)
 
 -- 负根: x₂ = (-b - √D) / 2a = (2 - 4) / 2 = -1
 def root_neg := frac_div (frac_sub (frac_neg b) sqrt_disc) (frac_mul (nat_to_frac 2) a)
 
 -- 验证负根等于 -1
-solve verify_root_neg : Eq Frac root_neg (frac_neg (nat_to_frac 1)) := refl Frac (frac_neg (nat_to_frac 1))
+def verify_root_neg : Eq Frac root_neg (frac_neg (nat_to_frac 1)) := refl Frac (frac_neg (nat_to_frac 1))
 
 -- =====================================================================
 -- 5. 最终验证: 两个根都满足原方程
 -- =====================================================================
 
 -- 正根验证: a·x₁² + b·x₁ + c = 0
-solve final_verify_pos : Eq Frac (frac_add (frac_add (frac_mul a (square root_pos)) (frac_mul b root_pos)) c) (nat_to_frac 0) := refl Frac (nat_to_frac 0)
+def final_verify_pos : Eq Frac (frac_add (frac_add (frac_mul a (square root_pos)) (frac_mul b root_pos)) c) (nat_to_frac 0) := refl Frac (nat_to_frac 0)
 
 -- 负根验证: a·x₂² + b·x₂ + c = 0
-solve final_verify_neg : Eq Frac (frac_add (frac_add (frac_mul a (square root_neg)) (frac_mul b root_neg)) c) (nat_to_frac 0) := refl Frac (nat_to_frac 0)
+def final_verify_neg : Eq Frac (frac_add (frac_add (frac_mul a (square root_neg)) (frac_mul b root_neg)) c) (nat_to_frac 0) := refl Frac (nat_to_frac 0)

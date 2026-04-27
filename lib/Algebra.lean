@@ -2,6 +2,9 @@
 -- 为求根公式推导提供必要的运算
 -- 依赖: Nat, Int, IntOrder, Frac
 
+import Frac
+import IntOrder
+
 -- 分数取负: -(n/d) = (-n)/d
 def frac_neg (f : Frac) : Frac := mk (int_neg (frac_num f)) (frac_den f)
 

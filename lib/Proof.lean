@@ -1,3 +1,5 @@
+import Nat
+
 theorem const_nat : forall (n : Nat), Nat -> Nat :=
   fun n : Nat => fun m : Nat => n
 

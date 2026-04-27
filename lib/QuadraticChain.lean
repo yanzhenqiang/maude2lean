@@ -5,6 +5,10 @@
 
 -- 依赖: Nat, Int, Frac, Algebra, Eq, NatProof, FracArith
 
+import Frac
+import FracArith
+import Eq
+
 -- -----------------------------------------------------------------
 -- 高层代数引理
 -- 这些从底层的 nat_add_comm / int_mul_comm / recursor 递推而来

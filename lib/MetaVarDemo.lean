@@ -1,6 +1,9 @@
 -- 多步求解示例：利用 solve 进行方程推导
 -- 每一步引入约束，最终确定未知量的值
 
+import Nat
+import Eq
+
 -- 步骤1：声明一个未知自然数 ?x
 solve step1 : Nat := ?x
 
