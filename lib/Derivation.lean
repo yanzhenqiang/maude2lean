@@ -1,16 +1,16 @@
 -- =====================================================================
--- 多步推导示例：theorem 与 solve 分离
--- theorem = 永久声明，可被引用
--- solve   = 一次性推导验证，不注册
+-- Multi-step derivation example: theorem and solve separation
+-- theorem = permanent declaration, can be referenced
+-- solve   = one-shot derivation check, not registered
 -- =====================================================================
 
--- 依赖: Nat, Eq
+-- Dependencies: Nat, Eq
 
 import Nat
 import Eq
 
 -- -----------------------------------------------------------------
--- 1. 基础定理（永久声明，后续可引用）
+-- 1. Basic theorems (permanent declarations, can be referenced later)
 -- -----------------------------------------------------------------
 
 theorem add_zero_right : forall (n : Nat), Eq Nat (add n zero) n :=
@@ -23,14 +23,14 @@ theorem add_zero_right : forall (n : Nat), Eq Nat (add n zero) n :=
         (refl Nat (succ (add n' zero))))
 
 -- -----------------------------------------------------------------
--- 2. 探索性推导（solve）—— 多步 tactic，一次性验证
+-- 2. Exploratory derivations (solve) -- multi-step tactic, one-shot check
 -- -----------------------------------------------------------------
 
--- 直接引用定理的 solve（无 ?x，纯验证）
+-- Directly reference theorem in solve (no ?x, pure verification)
 solve step_add_zero : Eq Nat (add zero zero) zero :=
   add_zero_right zero
 
--- 多步 by-tactic 的 solve（无 ?x，纯演绎验证）
+-- Multi-step by-tactic solve (no ?x, pure deductive verification)
 solve chain_double_zero : Eq Nat (add (add zero zero) zero) zero := by
   have h1 : Eq Nat (add zero zero) zero := add_zero_right zero
   have h2 : Eq Nat (add (add zero zero) zero) (add zero zero) := (
@@ -49,7 +49,7 @@ solve chain_double_zero : Eq Nat (add (add zero zero) zero) zero := by
   exact h4
 
 -- -----------------------------------------------------------------
--- 3. 另一个 theorem（不引用 solve，只引用 theorem）
+-- 3. Another theorem (does not reference solve, only references theorem)
 -- -----------------------------------------------------------------
 
 theorem add_zero_right_special : Eq Nat (add (add zero zero) zero) zero :=

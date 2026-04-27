@@ -1,4 +1,4 @@
--- 命题逻辑基础
+-- Propositional logic basics
 
 inductive True : Prop where
 | trivial : True
@@ -9,5 +9,5 @@ inductive Or (A : Prop) (B : Prop) : Prop where
 | inl : A -> Or A B
 | inr : B -> Or A B
 
--- 否定
+-- Negation
 def Not (A : Prop) : Prop := A -> False

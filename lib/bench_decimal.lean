@@ -1,9 +1,9 @@
 import Decimal
 
--- 额外的比较函数（Decimal.lean 中未定义）
+-- Additional comparison functions (not defined in Decimal.lean)
 def dec_le (a b : Decimal) : Bool := not (dec_lt b a)
 
--- 基准测试数据
+-- Benchmark data
 def e0  : Decimal := nat_to_dec 3
 def e1  : Decimal := nat_to_dec 1
 def e2  : Decimal := nat_to_dec 4

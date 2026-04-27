@@ -1,14 +1,14 @@
 -- =====================================================================
--- 基础功能测试集
--- 覆盖 solve、theorem、by-tactic、have、intro、exact、refl 等
--- 依赖: Nat.lean, Eq.lean
+-- Basic functionality test suite
+-- Covers solve, theorem, by-tactic, have, intro, exact, refl, etc.
+-- Dependencies: Nat.lean, Eq.lean
 -- =====================================================================
 
 import Nat
 import Eq
 
 -- -----------------------------------------------------------------
--- 1. solve 声明（含 metavariable）
+-- 1. solve declarations (with metavariables)
 -- -----------------------------------------------------------------
 
 solve test_solve : Nat := ?x
@@ -18,7 +18,7 @@ solve test_add : Nat := add ?x zero
 solve test_eq : Eq Nat ?x zero := refl Nat zero
 
 -- -----------------------------------------------------------------
--- 2. by-tactic 基础
+-- 2. by-tactic basics
 -- -----------------------------------------------------------------
 
 solve test_refl : Eq Nat zero zero := by refl
@@ -40,7 +40,7 @@ theorem test_have : Eq Nat zero zero := by
 theorem test_refl_theorem : Eq Nat zero zero := by exact refl Nat zero
 
 -- -----------------------------------------------------------------
--- 4. 链式推导（单 solve 内多步 have）
+-- 4. Chained derivations (multiple have steps in a single solve)
 -- -----------------------------------------------------------------
 
 solve eq_chain : Eq Nat zero zero := by

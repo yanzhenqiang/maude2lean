@@ -3,12 +3,12 @@ import Eq
 import True
 
 -- =====================================================================
--- 十进制整数系统（Decimal 高位在前，符合书写直觉）
--- 内部计算通过 dec_to_le / le_to_dec 反转到底层 List Digit
+-- Decimal integer system (Decimal: most significant digit first, intuitive notation)
+-- Internal computation reverses to underlying List Digit via dec_to_le / le_to_dec
 -- =====================================================================
 
 -- -----------------------------------------------------------------
--- 1. 数字 0-9（10 个基本符号）
+-- 1. Digits 0-9 (10 basic symbols)
 -- -----------------------------------------------------------------
 
 inductive Digit where
@@ -24,7 +24,7 @@ inductive Digit where
 | d9 : Digit
 
 -- -----------------------------------------------------------------
--- 2. Bool（进位标记）
+-- 2. Bool (carry flag)
 -- -----------------------------------------------------------------
 
 inductive Bool where
@@ -32,7 +32,7 @@ inductive Bool where
 | true : Bool
 
 -- -----------------------------------------------------------------
--- 3. 相等类型 Eq（带参数版本，支持 refl）
+-- 3. Equality type Eq (parameterized version, supports refl)
 -- -----------------------------------------------------------------
 
 def not (b : Bool) : Bool :=
@@ -56,7 +56,7 @@ def nat_eq (m n : Nat) : Bool :=
     n
 
 -- -----------------------------------------------------------------
--- 3. 通用 List
+-- 3. Generic List
 -- -----------------------------------------------------------------
 
 inductive List (A : Type) where
@@ -64,7 +64,7 @@ inductive List (A : Type) where
 | cons : A -> List A -> List A
 
 -- -----------------------------------------------------------------
--- 4. Decimal = 高位在前的十进制数
+-- 4. Decimal = most-significant-digit-first decimal number
 --    0   = dnil
 --    123 = D1 (D2 (D3 Dnil))
 -- -----------------------------------------------------------------
@@ -83,7 +83,7 @@ inductive Decimal where
 | D9 : Decimal -> Decimal
 
 -- -----------------------------------------------------------------
--- 5. Digit -> Nat 映射（验证用）
+-- 5. Digit -> Nat mapping (for verification)
 -- -----------------------------------------------------------------
 
 def digit_to_nat (d : Digit) : Nat :=
@@ -101,7 +101,7 @@ def digit_to_nat (d : Digit) : Nat :=
     d
 
 -- -----------------------------------------------------------------
--- 6. 转换函数：Decimal <-> List Digit（反转）
+-- 6. Conversion functions: Decimal <-> List Digit (reversal)
 -- -----------------------------------------------------------------
 
 def le_append_digit (n : List Digit) (d : Digit) : List Digit :=
@@ -125,14 +125,14 @@ def dec_to_le (d : Decimal) : List Digit :=
     (fun _ => \ih : List Digit . le_append_digit ih d9)
     d
 
--- 将 Digit 转为单个 Decimal
+-- Convert a Digit to a single Decimal
 def digit_to_decimal (d : Digit) : Decimal :=
   match d : Decimal with
   | d0 => D0 Dnil | d1 => D1 Dnil | d2 => D2 Dnil | d3 => D3 Dnil
   | d4 => D4 Dnil | d5 => D5 Dnil | d6 => D6 Dnil | d7 => D7 Dnil
   | d8 => D8 Dnil | d9 => D9 Dnil
 
--- 将 Digit 追加到 Decimal 末尾（保持高位在前）
+-- Append a Digit to the end of Decimal (keeping most significant digit first)
 def dec_append_digit (n : Decimal) (d : Digit) : Decimal :=
   rec.Decimal (fun _ => Decimal)
     (digit_to_decimal d)
@@ -155,7 +155,7 @@ def le_to_dec (n : List Digit) : Decimal :=
     n
 
 -- -----------------------------------------------------------------
--- 7. 底层 List Digit 算法（低位在前，用于计算）
+-- 7. Low-level List Digit algorithms (least significant digit first, for computation)
 -- -----------------------------------------------------------------
 
 def le_to_nat (n : List Digit) : Nat :=
@@ -235,7 +235,7 @@ def le_eq (a b : List Digit) : Bool :=
     a b
 
 -- -----------------------------------------------------------------
--- 8. Decimal API（wrapper，用户可见）
+-- 8. Decimal API (wrapper, user-facing)
 -- -----------------------------------------------------------------
 
 def dec_to_nat (n : Decimal) : Nat := le_to_nat (dec_to_le n)
@@ -273,15 +273,15 @@ def dec_mod (a b : Decimal) : Decimal := nat_to_dec (nat_mod (dec_to_nat a) (dec
 def dec_lt (a b : Decimal) : Bool := nat_gt (dec_to_nat b) (dec_to_nat a)
 
 -- -----------------------------------------------------------------
--- 9. Digit x Decimal 乘法
+-- 9. Digit x Decimal multiplication
 -- -----------------------------------------------------------------
 
--- Digit x Decimal 乘法（通过 Nat 中转）
+-- Digit x Decimal multiplication (via Nat intermediate)
 def digit_decimal_mul (d : Digit) (n : Decimal) : Decimal :=
   nat_to_dec (nat_mul (digit_to_nat d) (dec_to_nat n))
 
 -- -----------------------------------------------------------------
--- 10. 带符号十进制整数
+-- 10. Signed decimal integer
 -- -----------------------------------------------------------------
 
 inductive Sign where
@@ -334,7 +334,7 @@ def signed_dec_mul (a b : SignedDecimal) : SignedDecimal :=
         sa
 
 -- -----------------------------------------------------------------
--- 11. 定点小数
+-- 11. Fixed-point decimal
 -- -----------------------------------------------------------------
 
 inductive Prod (A : Type) (B : Type) where
@@ -342,7 +342,7 @@ inductive Prod (A : Type) (B : Type) where
 
 def FloatDecimal := Prod Decimal Decimal
 
--- 拼接两个 Decimal（高位在前）
+-- Concatenate two Decimals (most significant digit first)
 def dec_append (a b : Decimal) : Decimal :=
   rec.Decimal (fun _ => Decimal)
     b
@@ -358,7 +358,7 @@ def dec_append (a b : Decimal) : Decimal :=
     (fun _ ih => D9 ih)
     a
 
--- Decimal 位数（0 用 Dnil 表示）
+-- Decimal digit count (0 represented as Dnil)
 def dec_len (d : Decimal) : Decimal :=
   rec.Decimal (fun _ => Decimal)
     Dnil
@@ -374,8 +374,8 @@ def dec_len (d : Decimal) : Decimal :=
     (fun _ ih => decimal_succ ih)
     d
 
--- 从整数部分和小数部分构造 FloatDecimal
--- 如 float_from_parts (D1 (D2 (D3 Dnil))) (D4 (D5 Dnil)) = 123.45
+-- Construct FloatDecimal from integer and fractional parts
+-- e.g. float_from_parts (D1 (D2 (D3 Dnil))) (D4 (D5 Dnil)) = 123.45
 def float_from_parts (int_part : Decimal) (frac_part : Decimal) : FloatDecimal :=
   pair Decimal Decimal (dec_append int_part frac_part) (dec_len frac_part)
 
@@ -405,7 +405,7 @@ def float_mul (a b : FloatDecimal) : FloatDecimal :=
       pair Decimal Decimal (dec_mul da db) (dec_add pa pb)
 
 -- -----------------------------------------------------------------
--- 12. 分数
+-- 12. Fractions
 -- -----------------------------------------------------------------
 
 def RatDecimal := Prod Decimal Decimal
@@ -439,7 +439,7 @@ def rat_div (a b : RatDecimal) : RatDecimal :=
         (dec_mul da nb)
 
 -- -----------------------------------------------------------------
--- 13. 幂运算
+-- 13. Exponentiation
 -- -----------------------------------------------------------------
 
 def nat_pow (base : Nat) (exp : Nat) : Nat :=
@@ -449,7 +449,7 @@ def dec_pow (base : Decimal) (exp : Decimal) : Decimal :=
   nat_to_dec (nat_pow (dec_to_nat base) (dec_to_nat exp))
 
 -- -----------------------------------------------------------------
--- 14. 科学计数法
+-- 14. Scientific notation
 -- -----------------------------------------------------------------
 
 def dec_ten_pow (n : Nat) : Decimal :=
@@ -467,7 +467,7 @@ def sci_to_decimal (sci : ScientificDecimal) : FloatDecimal :=
         sign
 
 -- -----------------------------------------------------------------
--- 19. 列表排序（quicksort）
+-- 19. List sorting (quicksort)
 -- -----------------------------------------------------------------
 
 def list_append (A : Type) (xs ys : List A) : List A :=
@@ -476,35 +476,35 @@ def list_append (A : Type) (xs ys : List A) : List A :=
     (fun x xs ih => cons A x ih)
     xs
 
--- 通用过滤：保留满足 p x = true 的元素
+-- Generic filter: keep elements where p x = true
 def list_filter (A : Type) (p : A -> Bool) (xs : List A) : List A :=
   rec.List A (fun _ => List A)
     (nil A)
     (fun x xs ih => if p x : List A then cons A x ih else ih)
     xs
 
--- 列表最大值（空列表返回默认值）
+-- List maximum (returns default for empty list)
 def list_max (A : Type) (le : A -> A -> Bool) (default : A) (xs : List A) : A :=
   rec.List A (fun _ => A)
     default
     (fun x xs ih => if le x ih : A then ih else x)
     xs
 
--- 列表最小值（空列表返回默认值）
+-- List minimum (returns default for empty list)
 def list_min (A : Type) (le : A -> A -> Bool) (default : A) (xs : List A) : A :=
   rec.List A (fun _ => A)
     default
     (fun x xs ih => if le x ih : A then x else ih)
     xs
 
--- 列表长度
+-- List length
 def list_length (A : Type) (xs : List A) : Nat :=
   rec.List A (fun _ => Nat)
     zero
     (fun x xs ih => succ ih)
     xs
 
--- Fuel-based quicksort：结构递归在 fuel 上，可归纳证明
+-- Fuel-based quicksort: structural recursion on fuel, amenable to induction
 def quicksort_fuel (A : Type) (le : A -> A -> Bool) (fuel : Nat) (xs : List A) : List A :=
   rec.Nat (fun _ => List A -> List A)
     (fun xs => nil A)
@@ -518,22 +518,22 @@ def quicksort_fuel (A : Type) (le : A -> A -> Bool) (fuel : Nat) (xs : List A) :
     fuel
     xs
 
--- 包装：用列表长度作为 fuel（足够保证正确计算）
+-- Wrapper: use list length as fuel (sufficient for correct computation)
 def quicksort (A : Type) (le : A -> A -> Bool) (xs : List A) : List A :=
   quicksort_fuel A le (list_length A xs) xs
 
--- Nat 上的 <=
+-- Nat less-than-or-equal
 def nat_le (m n : Nat) : Bool := not (nat_gt m n)
 
 -- -----------------------------------------------------------------
--- 20. 证明基础设施
+-- 20. Proof infrastructure
 -- -----------------------------------------------------------------
 
--- 逻辑合取
+-- Logical conjunction
 inductive And (P : Prop) (Q : Prop) : Prop where
 | conj : P -> Q -> And P Q
 
--- Nat 列表有序谓词（递归定义，避免 indexed inductive 的 cases 限制）
+-- Nat list sorted predicate (recursive definition, avoids indexed inductive case limitations)
 def SortedNat (xs : List Nat) : Prop :=
   rec.List Nat (fun _ => Prop) True
     (fun x xs ih => rec.List Nat (fun _ => Prop) True
@@ -541,52 +541,52 @@ def SortedNat (xs : List Nat) : Prop :=
       xs)
     xs
 
--- Nat 列表最大值/最小值（空列表返回 zero）
+-- Nat list max/min (returns zero for empty list)
 def nat_list_max (xs : List Nat) : Nat := list_max Nat nat_le zero xs
 def nat_list_min (xs : List Nat) : Nat := list_min Nat nat_le zero xs
 
--- 上界：列表中所有元素 <= pivot（即 max(xs) <= pivot）
+-- Upper bound: all elements in list <= pivot (i.e. max(xs) <= pivot)
 def list_upper_bound (pivot : Nat) (xs : List Nat) : Prop :=
   Eq Bool (nat_le (nat_list_max xs) pivot) true
 
--- 下界：列表中所有元素 >= pivot（即 min(xs) >= pivot）
+-- Lower bound: all elements in list >= pivot (i.e. min(xs) >= pivot)
 def list_lower_bound (pivot : Nat) (xs : List Nat) : Prop :=
   Eq Bool (nat_le pivot (nat_list_min xs)) true
 
--- 成员关系
+-- Membership relation
 def list_mem (x : Nat) (xs : List Nat) : Bool :=
   rec.List Nat (fun _ => Bool)
     false
     (fun y ys ih => if nat_eq x y : Bool then true else ih)
     xs
 
--- 基础引理：空列表有序
+-- Base lemma: empty list is sorted
 theorem sorted_nil : SortedNat (nil Nat) := by
   exact trivial
 
--- 基础引理：单元素列表有序
+-- Base lemma: singleton list is sorted
 theorem sorted_single : forall (x : Nat), SortedNat (cons Nat x (nil Nat)) := by
   intro x
   exact trivial
 
--- nat_le 反射性（关键引理）
+-- nat_le reflexivity (key lemma)
 theorem nat_le_refl : forall (x : Nat), Eq Bool (nat_le x x) true :=
   rec.Nat (fun x : Nat => Eq Bool (nat_le x x) true)
     (refl Bool true)
     (fun x' : Nat => fun ih : Eq Bool (nat_le x' x') true => ih)
 
--- nat_le zero 最小元
+-- nat_le zero is minimum
 theorem nat_le_zero_min : forall (n : Nat), Eq Bool (nat_le zero n) true :=
   rec.Nat (fun n : Nat => Eq Bool (nat_le zero n) true)
     (refl Bool true)
     (fun n' : Nat => fun ih : Eq Bool (nat_le zero n') true => refl Bool true)
 
--- 空列表的上界是任意 pivot
+-- Empty list has any pivot as upper bound
 theorem upper_bound_nil : forall (pivot : Nat), list_upper_bound pivot (nil Nat) := by
   intro pivot
   exact refl Bool true
 
--- 两个元素有序
+-- Two elements are ordered
 theorem sorted_two : forall (x y : Nat),
   Eq Bool (nat_le x y) true -> SortedNat (cons Nat x (cons Nat y (nil Nat))) := by
   intro x
@@ -594,21 +594,21 @@ theorem sorted_two : forall (x y : Nat),
   intro h
   exact conj (Eq Bool (nat_le x y) true) True h trivial
 
--- 空列表的下界是 zero
+-- Empty list has zero as lower bound
 theorem lower_bound_nil_zero : list_lower_bound zero (nil Nat) := by
   exact refl Bool true
 
--- Bool 双重否定
+-- Bool double negation
 theorem bool_double_neg : forall (b : Bool), Eq Bool (not (not b)) b :=
   rec.Bool (fun b : Bool => Eq Bool (not (not b)) b)
     (refl Bool false)
     (refl Bool true)
 
 -- -----------------------------------------------------------------
--- 21. 列表有序性判定（计算函数）
+-- 21. List sortedness decision (computational function)
 -- -----------------------------------------------------------------
 
--- 列表是否整体有序（非递减）
+-- Whether the list is globally sorted (non-decreasing)
 def is_sorted (xs : List Nat) : Bool :=
   rec.List Nat (fun _ => Bool) true
     (fun x xs ih => rec.List Nat (fun _ => Bool) true
@@ -617,27 +617,27 @@ def is_sorted (xs : List Nat) : Bool :=
     xs
 
 
--- And 投影
+-- And projection
 def and_fst (P Q : Prop) (h : And P Q) : P :=
   rec.And P Q (fun _ => P) (fun p q => p) h
 
 def and_snd (P Q : Prop) (h : And P Q) : Q :=
   rec.And P Q (fun _ => Q) (fun p q => q) h
 
--- 所有元素 <= pivot
+-- All elements <= pivot
 def AllLeNat (pivot : Nat) (xs : List Nat) : Prop :=
   rec.List Nat (fun _ => Prop) True
     (fun x xs ih => And (Eq Bool (nat_le x pivot) true) ih)
     xs
 
--- 所有元素 >= pivot
+-- All elements >= pivot
 def AllGeNat (pivot : Nat) (xs : List Nat) : Prop :=
   rec.List Nat (fun _ => Prop) True
     (fun x xs ih => And (Eq Bool (nat_le pivot x) true) ih)
     xs
 
 
--- all_le_append：append 保持 AllLeNat
+-- all_le_append: append preserves AllLeNat
 def all_le_append (pivot : Nat) (xs ys : List Nat)
   (h1 : AllLeNat pivot xs) (h2 : AllLeNat pivot ys) : AllLeNat pivot (list_append Nat xs ys) :=
   rec.List Nat (fun zs : List Nat => AllLeNat pivot zs -> AllLeNat pivot (list_append Nat zs ys))
@@ -649,7 +649,7 @@ def all_le_append (pivot : Nat) (xs ys : List Nat)
     xs
     h1
 
--- all_ge_append：append 保持 AllGeNat
+-- all_ge_append: append preserves AllGeNat
 def all_ge_append (pivot : Nat) (xs ys : List Nat)
   (h1 : AllGeNat pivot xs) (h2 : AllGeNat pivot ys) : AllGeNat pivot (list_append Nat xs ys) :=
   rec.List Nat (fun zs : List Nat => AllGeNat pivot zs -> AllGeNat pivot (list_append Nat zs ys))
@@ -661,7 +661,7 @@ def all_ge_append (pivot : Nat) (xs ys : List Nat)
     xs
     h1
 
--- filter_preserves_all_le：filter 保持 AllLeNat
+-- filter_preserves_all_le: filter preserves AllLeNat
 def filter_preserves_all_le (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
   (h : AllLeNat pivot xs) : AllLeNat pivot (list_filter Nat p xs) :=
   rec.List Nat (fun ys : List Nat => AllLeNat pivot ys -> AllLeNat pivot (list_filter Nat p ys))
@@ -678,7 +678,7 @@ def filter_preserves_all_le (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
     xs
     h
 
--- filter_preserves_all_ge：filter 保持 AllGeNat
+-- filter_preserves_all_ge: filter preserves AllGeNat
 def filter_preserves_all_ge (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
   (h : AllGeNat pivot xs) : AllGeNat pivot (list_filter Nat p xs) :=
   rec.List Nat (fun ys : List Nat => AllGeNat pivot ys -> AllGeNat pivot (list_filter Nat p ys))
@@ -695,7 +695,7 @@ def filter_preserves_all_ge (pivot : Nat) (p : Nat -> Bool) (xs : List Nat)
     xs
     h
 
--- filter_all_le：filter (fun x => x <= head) 的结果所有元素都 <= head
+-- filter_all_le: result of filter (fun x => x <= head) has all elements <= head
 def filter_all_le (head : Nat) (xs : List Nat) : AllLeNat head (list_filter Nat (fun x => nat_le x head) xs) :=
   rec.List Nat (fun ys : List Nat => AllLeNat head (list_filter Nat (fun x => nat_le x head) ys))
     trivial
@@ -712,7 +712,7 @@ def filter_all_le (head : Nat) (xs : List Nat) : AllLeNat head (list_filter Nat 
         (refl Bool (nat_le x head)))
     xs
 
--- filter_all_ge：filter (fun x => head <= x) 的结果所有元素都 >= head
+-- filter_all_ge: result of filter (fun x => head <= x) has all elements >= head
 def filter_all_ge (head : Nat) (xs : List Nat) : AllGeNat head (list_filter Nat (fun x => nat_le head x) xs) :=
   rec.List Nat (fun ys : List Nat => AllGeNat head (list_filter Nat (fun x => nat_le head x) ys))
     trivial
@@ -729,7 +729,7 @@ def filter_all_ge (head : Nat) (xs : List Nat) : AllGeNat head (list_filter Nat 
         (refl Bool (nat_le head x)))
     xs
 
--- sorted_cons_ge：cons pivot ys 有序，当 ys 有序且 pivot <= ys 的每个元素
+-- sorted_cons_ge: cons pivot ys is sorted when ys is sorted and pivot <= every element of ys
 def sorted_cons_ge (pivot : Nat) (ys : List Nat)
   (sorted_y : SortedNat ys) (ge_y : AllGeNat pivot ys) : SortedNat (cons Nat pivot ys) :=
   rec.List Nat (fun zs : List Nat => SortedNat zs -> AllGeNat pivot zs -> SortedNat (cons Nat pivot zs))
@@ -742,7 +742,7 @@ def sorted_cons_ge (pivot : Nat) (ys : List Nat)
     sorted_y
     ge_y
 
--- sorted_tail：从 SortedNat (cons x xs') 提取 SortedNat xs'
+-- sorted_tail: extract SortedNat xs' from SortedNat (cons x xs')
 def sorted_tail (x : Nat) (xs' : List Nat) (h : SortedNat (cons Nat x xs')) : SortedNat xs' :=
   rec.List Nat (fun zs : List Nat => SortedNat (cons Nat x zs) -> SortedNat zs)
     (fun _ : SortedNat (cons Nat x (nil Nat)) => trivial)
@@ -751,7 +751,7 @@ def sorted_tail (x : Nat) (xs' : List Nat) (h : SortedNat (cons Nat x xs')) : So
     xs'
     h
 
--- append_sorted_cons：append xs (cons pivot ys) 有序
+-- append_sorted_cons: append xs (cons pivot ys) is sorted
 def append_sorted_cons (xs : List Nat) (pivot : Nat) (ys : List Nat)
   (sorted_xs : SortedNat xs) (sorted_ys : SortedNat ys)
   (ge_ys : AllGeNat pivot ys) (le_xs : AllLeNat pivot xs) :
@@ -769,7 +769,7 @@ def append_sorted_cons (xs : List Nat) (pivot : Nat) (ys : List Nat)
     sorted_xs
     le_xs
 
--- quicksort_preserves_all_le：quicksort 保持 AllLeNat
+-- quicksort_preserves_all_le: quicksort preserves AllLeNat
 def quicksort_preserves_all_le (pivot : Nat) (fuel : Nat) (xs : List Nat)
   (h : AllLeNat pivot xs) : AllLeNat pivot (quicksort_fuel Nat nat_le fuel xs) :=
   rec.Nat (fun fuel' : Nat => forall (zs : List Nat), AllLeNat pivot zs -> AllLeNat pivot (quicksort_fuel Nat nat_le fuel' zs))
@@ -796,7 +796,7 @@ def quicksort_preserves_all_le (pivot : Nat) (fuel : Nat) (xs : List Nat)
     xs
     h
 
--- quicksort_preserves_all_ge：quicksort 保持 AllGeNat
+-- quicksort_preserves_all_ge: quicksort preserves AllGeNat
 def quicksort_preserves_all_ge (pivot : Nat) (fuel : Nat) (xs : List Nat)
   (h : AllGeNat pivot xs) : AllGeNat pivot (quicksort_fuel Nat nat_le fuel xs) :=
   rec.Nat (fun fuel' : Nat => forall (zs : List Nat), AllGeNat pivot zs -> AllGeNat pivot (quicksort_fuel Nat nat_le fuel' zs))
@@ -823,7 +823,7 @@ def quicksort_preserves_all_ge (pivot : Nat) (fuel : Nat) (xs : List Nat)
     xs
     h
 
--- 核心定理：quicksort_fuel 返回的列表总是有序的
+-- Core theorem: quicksort_fuel always returns a sorted list
 def quicksort_fuel_sorted (fuel : Nat) (xs : List Nat) : SortedNat (quicksort_fuel Nat nat_le fuel xs) :=
   rec.Nat (fun fuel' : Nat => forall (zs : List Nat), SortedNat (quicksort_fuel Nat nat_le fuel' zs))
     (fun zs : List Nat => trivial)
@@ -842,7 +842,7 @@ def quicksort_fuel_sorted (fuel : Nat) (xs : List Nat) : SortedNat (quicksort_fu
     fuel
     xs
 
--- 顶层包装定理
+-- Top-level wrapper theorem
 theorem quicksort_sorted (xs : List Nat) : SortedNat (quicksort Nat nat_le xs) :=
   quicksort_fuel_sorted (list_length Nat xs) xs
 

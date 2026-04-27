@@ -1,5 +1,5 @@
--- 自然数运算引理
--- 依赖: Nat.lean, Eq.lean
+-- Natural number arithmetic lemmas
+-- Dependencies: Nat.lean, Eq.lean
 
 import Nat
 import Eq
@@ -48,7 +48,7 @@ theorem nat_add_comm : forall (m : Nat) (n : Nat), Eq Nat (nat_add m n) (nat_add
           _ = nat_add n (succ m') := eq_sym Nat (nat_add n (succ m')) (succ (nat_add n m')) (nat_add_succ_right n m'))
       m
 
--- le n n (自反性)
+-- le n n (reflexivity)
 theorem le_refl : forall (n : Nat), le n n :=
   fun n : Nat =>
     rec.Nat (fun x : Nat => le x x)

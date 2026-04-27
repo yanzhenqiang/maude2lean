@@ -1,5 +1,5 @@
--- 实数：通过柯西序列的商类型构造
--- 依赖: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, Cauchy.lean
+-- Real numbers: constructed as quotient of Cauchy sequences
+-- Dependencies: Order.lean, True.lean, Int.lean, IntOrder.lean, Frac.lean, Cauchy.lean
 
 import Nat
 import Eq

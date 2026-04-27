@@ -63,13 +63,13 @@ fn run_lean_check() {
     println!("║{:^71}║", "Lean 4 Kernel Symbolic Execution Demo");
     println!("╚{}╝", line);
 
-    println!("\n【Step 1】构建全局环境 (Environment)");
-    println!("  添加 Axioms: Nat : Type, zero : Nat, succ : Nat → Nat");
+    println!("\n[Step 1] Building global environment");
+    println!("  Adding Axioms: Nat : Type, zero : Nat, succ : Nat -> Nat");
 
     let mut env = Environment::new();
-    println!("  ✓ 环境就绪");
+    println!("  ✓ Environment ready");
 
-    println!("\n【Step 2】声明 Inductive 类型 Nat（自动生成 recursor）");
+    println!("\n[Step 2] Declaring Inductive type Nat (auto-generating recursor)");
     println!("  inductive Nat");
     println!("    | zero : Nat");
     println!("    | succ : Nat → Nat");
@@ -93,10 +93,10 @@ fn run_lean_check() {
     let zero = Expr::mk_const(Name::new("zero"), vec![]);
     let succ = Expr::mk_const(Name::new("succ"), vec![]);
     let nat_rec = Expr::mk_const(Name::new("rec").extend("Nat"), vec![]);
-    println!("  ✓ 自动生成: rec.Nat (recursor)");
-    println!("  ✓ 环境常量数: {}", env.num_constants());
+    println!("  ✓ Auto-generated: rec.Nat (recursor)");
+    println!("  ✓ Number of environment constants: {}", env.num_constants());
 
-    println!("\n【Step 3】类型推断 (Type Inference)");
+    println!("\n[Step 3] Type Inference");
 
     let mut st = TypeCheckerState::new(env.clone());
     let mut tc = TypeChecker::new(&mut st);
@@ -124,7 +124,7 @@ fn run_lean_check() {
     let ty = tc.infer(&app).unwrap();
     println!("  infer({:15}) → {}", "(λx:Nat.x) zero", format_expr(&ty));
 
-    println!("\n【Step 4】弱头归一化 (WHNF) —— Beta + Iota 归约");
+    println!("\n[Step 4] Weak Head Normalization (WHNF) — Beta + Iota reduction");
 
     let beta_expr = Expr::mk_app(id_nat, zero.clone());
     let beta_result = tc.whnf(&beta_expr);
@@ -153,9 +153,9 @@ fn run_lean_check() {
     let rec_result = tc.whnf(&rec_one);
     println!("  Nat.rec( motive, zero, succ_minor, succ(zero) )   ─whnf→   {}", format_expr(&rec_result));
 
-    println!("\n【Step 5】Delta 归约 —— 定义展开");
-    println!("  添加定义:  one := succ zero");
-    println!("  添加定义:  two := succ one");
+    println!("\n[Step 5] Delta reduction — definition expansion");
+    println!("  Adding definition:  one := succ zero");
+    println!("  Adding definition:  two := succ one");
 
     let one_def = Declaration::Definition(DefinitionVal {
         constant_val: ConstantVal { name: Name::new("one"), level_params: vec![], ty: nat.clone() },
@@ -183,7 +183,7 @@ fn run_lean_check() {
     println!("  whnf(one)   ─→   {}", format_expr(&tc2.whnf(&one_expr)));
     println!("  whnf(two)   ─→   {}", format_expr(&tc2.whnf(&two_expr)));
 
-    println!("\n【Step 6】定义等价 (Definitional Equality)");
+    println!("\n[Step 6] Definitional Equality");
 
     let eq_cases = vec![
         ("zero == zero", zero.clone(), zero.clone(), true),
@@ -198,18 +198,18 @@ fn run_lean_check() {
         println!("  {} {:25} → {} (expected {})", mark, label, result, expected);
     }
 
-    println!("\n【Step 8】完全归一化 (Full Normalization)");
+    println!("\n[Step 8] Full Normalization");
 
     let nf_expr = Expr::mk_app(
         Expr::mk_app(Expr::mk_app(Expr::mk_app(nat_rec, motive), zero.clone()), succ_minor),
         Expr::mk_app(succ.clone(), Expr::mk_const(Name::new("one"), vec![])),
     );
-    println!("  输入:  {}", format_expr(&nf_expr));
+    println!("  Input:  {}", format_expr(&nf_expr));
     let nf_result = tc2.nf(&nf_expr);
     println!("  nf:    {}", format_expr(&nf_result));
 
     println!("\n╔{}╗", line);
-    println!("║{:^71}║", "演示完成 — 所有符号执行步骤通过");
+    println!("║{:^71}║", "Demo complete — all symbolic execution steps passed");
     println!("╚{}╝", line);
 }
 
