@@ -15,7 +15,7 @@ use std::rc::Rc;
 ///   - Match: match e : T with | ctor1 => e1 | ctor2 x => e2
 ///   - Sort: Type, Prop
 ///   - Parens: (e)
-///   - Nat literals: 0, 1, 2, ...
+///   - Numeric literals: 0, 1, 2, ... (expand to succ^n zero in parser)
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpr {
