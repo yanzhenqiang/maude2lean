@@ -46,15 +46,15 @@ fn print_usage(prog: &str) {
 }
 
 fn run_repl() {
-    let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    let mut repl = lean_cauchy_kernel::repl::Repl::new();
     repl.run();
 }
 
 fn run_lean_check() {
-    use lean_cauchy_kernel::lean::declaration::*;
-    use lean_cauchy_kernel::lean::environment::Environment;
-    use lean_cauchy_kernel::lean::expr::*;
-    use lean_cauchy_kernel::lean::type_checker::{TypeChecker, TypeCheckerState};
+    use lean_cauchy_kernel::declaration::*;
+    use lean_cauchy_kernel::environment::Environment;
+    use lean_cauchy_kernel::expr::*;
+    use lean_cauchy_kernel::type_checker::{TypeChecker, TypeCheckerState};
     use std::rc::Rc;
 
     let line = "═══════════════════════════════════════════════════════════════════════";
@@ -214,7 +214,7 @@ fn run_lean_check() {
 }
 
 fn run_check_files(files: &[String]) {
-    let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    let mut repl = lean_cauchy_kernel::repl::Repl::new();
     match repl.check_files(&files.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
         Ok(()) => println!("OK"),
         Err(e) => {
@@ -241,7 +241,7 @@ fn run_tui(args: &[String]) {
     let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Load dependencies via Repl
-    let mut repl = lean_cauchy_kernel::lean::repl::Repl::new();
+    let mut repl = lean_cauchy_kernel::repl::Repl::new();
     repl.set_quiet(true);
     if !deps.is_empty() {
         match repl.check_files(&deps.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
@@ -261,15 +261,15 @@ fn run_tui(args: &[String]) {
         }
     }
 
-    let mut app = lean_cauchy_kernel::lean::tui::TuiApp::new(repl, lines);
+    let mut app = lean_cauchy_kernel::tui::TuiApp::new(repl, lines);
     if let Err(e) = app.run() {
         eprintln!("TUI error: {}", e);
         std::process::exit(1);
     }
 }
 
-fn format_expr(e: &lean_cauchy_kernel::lean::expr::Expr) -> String {
-    use lean_cauchy_kernel::lean::expr::*;
+fn format_expr(e: &lean_cauchy_kernel::expr::Expr) -> String {
+    use lean_cauchy_kernel::expr::*;
     match e {
         Expr::BVar(n) => format!("x{}", n),
         Expr::Const(name, _) => name.to_string(),

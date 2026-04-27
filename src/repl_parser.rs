@@ -2121,7 +2121,7 @@ mod tests {
 
     #[test]
     fn test_parse_nat_lean_file() {
-        let path = std::path::Path::new("Nat.lean");
+        let path = std::path::Path::new("lib/Nat.lean");
         let src = std::fs::read_to_string(path).unwrap();
         let mut p = Parser::new(&src);
         let decls = p.parse_file().unwrap();

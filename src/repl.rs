@@ -361,7 +361,15 @@ impl Repl {
     }
 
     fn process_import(&mut self, path: String) -> Result<(), String> {
-        let filepath = format!("{}.lean", path);
+        let mut filepath = format!("{}.lean", path);
+
+        // If not found in current directory, try lib/
+        if !std::path::Path::new(&filepath).exists() {
+            let alt = format!("lib/{}.lean", path);
+            if std::path::Path::new(&alt).exists() {
+                filepath = alt;
+            }
+        }
 
         // Avoid loading the same file twice in one session
         if self.loaded_files.contains(&filepath) {
@@ -856,7 +864,7 @@ impl Repl {
         }
 
         // Handle tactic block
-        let value_expr = match &value {
+        let (value_expr, introduced_vars) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 if !is_theorem {
                     return Err("Tactic blocks are only allowed in theorems".to_string());
@@ -881,14 +889,39 @@ impl Repl {
                 }
 
                 let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
-                engine.build_proof(&root_mvar)
+                let proof = engine.build_proof(&root_mvar);
+                (proof, engine.introduced_vars)
             }
-            _ => value.to_expr(&self.env_bindings, &self.env, &mut bound_vars),
+            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new()),
         };
 
         // Embed params into value as lambdas
+        // For tactic blocks, the proof term contains FVars from the local context;
+        // abstract them back to BVars before wrapping lambdas.
         let mut final_value = value_expr;
+        let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
+        if is_tactic {
+            // Abstract introduced vars that are NOT already in param_exprs
+            // (reverse order: last introduced first)
+            let param_names: std::collections::HashSet<String> =
+                param_exprs.iter().map(|(n, _)| n.clone()).collect();
+            for (name, ty) in introduced_vars.iter().rev() {
+                if param_names.contains(&name.to_string()) {
+                    continue;
+                }
+                final_value = final_value.abstract_fvar(name, 0);
+                final_value = Expr::Lambda(
+                    name.clone(),
+                    BinderInfo::Default,
+                    Rc::new(ty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+        }
         for (pname, pty) in param_exprs.iter().rev() {
+            if is_tactic {
+                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
+            }
             final_value = Expr::Lambda(
                 Name::new(pname),
                 BinderInfo::Default,
@@ -1005,7 +1038,7 @@ impl Repl {
         let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
 
         // Handle tactic block for solve (like theorem does)
-        let value_expr = match &value {
+        let (value_expr, introduced_vars) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 let mut target_expr = ret_ty_expr.clone();
                 // Wrap target with parameter types as Pi binders
@@ -1026,14 +1059,38 @@ impl Repl {
                 }
 
                 let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
-                engine.build_proof(&root_mvar)
+                let proof = engine.build_proof(&root_mvar);
+                (proof, engine.introduced_vars)
             }
-            _ => value.to_expr(&self.env_bindings, &self.env, &mut bound_vars),
+            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new()),
         };
 
         // Embed params into value as lambdas
+        // For tactic blocks, abstract FVars from the local context back to BVars.
         let mut final_value = value_expr;
+        let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
+        if is_tactic {
+            // Abstract introduced vars that are NOT already in param_exprs
+            // (reverse order: last introduced first)
+            let param_names: std::collections::HashSet<String> =
+                param_exprs.iter().map(|(n, _)| n.clone()).collect();
+            for (name, ty) in introduced_vars.iter().rev() {
+                if param_names.contains(&name.to_string()) {
+                    continue;
+                }
+                final_value = final_value.abstract_fvar(name, 0);
+                final_value = Expr::Lambda(
+                    name.clone(),
+                    BinderInfo::Default,
+                    Rc::new(ty.clone()),
+                    Rc::new(final_value),
+                );
+            }
+        }
         for (pname, pty) in param_exprs.iter().rev() {
+            if is_tactic {
+                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
+            }
             final_value = Expr::Lambda(
                 Name::new(pname),
                 BinderInfo::Default,
@@ -1527,6 +1584,47 @@ fn resolve_tactic_vars(expr: &Expr, engine: &TacticEngine) -> Expr {
     }
 }
 
+/// Parse rewrite argument list for `rw [h1, h2]` or `rw [←h]` syntax.
+/// Returns a list of (is_reverse, expr_string).
+fn parse_rewrite_list(input: &str) -> Result<Vec<(bool, String)>, String> {
+    let input = input.trim();
+    if input.starts_with('[') {
+        if !input.ends_with(']') {
+            return Err("rewrite: expected closing ']'".to_string());
+        }
+        let inner = &input[1..input.len()-1];
+        let parts: Vec<&str> = inner.split(',').collect();
+        let mut result = Vec::new();
+        for part in parts {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (is_reverse, expr_str) = if part.starts_with('←') {
+                (true, part[3..].trim().to_string())
+            } else if part.starts_with("<-") {
+                (true, part[2..].trim().to_string())
+            } else {
+                (false, part.to_string())
+            };
+            result.push((is_reverse, expr_str));
+        }
+        if result.is_empty() {
+            return Err("rewrite: empty list".to_string());
+        }
+        Ok(result)
+    } else {
+        let (is_reverse, expr_str) = if input.starts_with('←') {
+            (true, input[3..].trim().to_string())
+        } else if input.starts_with("<-") {
+            (true, input[2..].trim().to_string())
+        } else {
+            (false, input.to_string())
+        };
+        Ok(vec![(is_reverse, expr_str)])
+    }
+}
+
 /// Execute a single tactic command (standalone to avoid borrow conflicts)
 fn execute_tactic(
     env: &Environment,
@@ -1572,7 +1670,7 @@ fn execute_tactic(
             let expr = resolve_tactic_vars(&expr, engine);
             engine.tactic_apply(&expr)
         }
-        "refl" | "reflexivity" => {
+        "refl" | "reflexivity" | "rfl" => {
             engine.tactic_refl()
         }
         "assumption" => {
@@ -1582,9 +1680,13 @@ fn execute_tactic(
             if rest.is_empty() {
                 return Err("rewrite requires an equality hypothesis".to_string());
             }
-            let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, rest)?;
-            let expr = resolve_tactic_vars(&expr, engine);
-            engine.tactic_rewrite(&expr)
+            let rewrites = parse_rewrite_list(rest)?;
+            for (is_reverse, expr_str) in rewrites {
+                let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, &expr_str)?;
+                let expr = resolve_tactic_vars(&expr, engine);
+                engine.tactic_rewrite(&expr, is_reverse)?;
+            }
+            Ok(())
         }
         "induction" => {
             if rest.is_empty() {

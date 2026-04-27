@@ -1,6 +1,6 @@
 use super::environment::Environment;
 use super::expr::*;
-use super::local_ctx::LocalCtx;
+use super::local_ctx::{LocalCtx, LocalDecl};
 use super::type_checker::{TypeChecker, TypeCheckerState};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -24,6 +24,8 @@ pub struct TacticEngine<'a> {
     next_mvar_idx: u64,
     /// MVar assignments accumulated during tactic execution
     pub mvar_assignments: HashMap<Name, Expr>,
+    /// Variables introduced by tactic_intro, in order (outermost first)
+    pub introduced_vars: Vec<(Name, Expr)>,
 }
 
 impl<'a> TacticEngine<'a> {
@@ -40,8 +42,9 @@ impl<'a> TacticEngine<'a> {
             goals: Vec::new(),
             next_mvar_idx: 0,
             mvar_assignments: HashMap::new(),
+            introduced_vars: Vec::new(),
         };
-        engine.push_goal(initial_target);
+        engine.push_goal(initial_target, LocalCtx::new());
         engine
     }
 
@@ -51,10 +54,10 @@ impl<'a> TacticEngine<'a> {
         Name::new(&format!("_tactic_mvar_{}", idx))
     }
 
-    fn push_goal(&mut self, target: Expr) -> Name {
+    fn push_goal(&mut self, target: Expr, lctx: LocalCtx) -> Name {
         let mvar = self.fresh_mvar_name();
         self.goals.push(Goal {
-            lctx: LocalCtx::new(),
+            lctx,
             target,
             mvar: mvar.clone(),
         });
@@ -169,6 +172,7 @@ impl<'a> TacticEngine<'a> {
 
                 // New target is the body with the bound var replaced by FVar
                 goal.target = body.instantiate(&fvar);
+                self.introduced_vars.push((fvar_name, (**dom).clone()));
                 Ok(())
             }
             _ => Err(format!("tactic_intro: target is not a Pi type: {}", format_expr(&target_whnf))),
@@ -178,6 +182,22 @@ impl<'a> TacticEngine<'a> {
     /// Close current goal with exact proof term
     pub fn tactic_exact(&mut self, proof: &Expr) -> Result<(), String> {
         let goal = self.pop_goal().ok_or("No goals remaining")?;
+
+        // Wrap proof with let-expressions for all let-bindings in the goal's context
+        let mut wrapped_proof = proof.clone();
+        let decls: Vec<_> = goal.lctx.iter_decls().collect();
+        for decl in decls.iter().rev() {
+            if let LocalDecl::LDecl { name, user_name, ty, value, .. } = decl {
+                wrapped_proof = wrapped_proof.abstract_fvar(name, 0);
+                wrapped_proof = Expr::Let(
+                    user_name.clone(),
+                    Rc::new(ty.clone()),
+                    Rc::new(value.clone()),
+                    Rc::new(wrapped_proof),
+                    false,
+                );
+            }
+        }
 
         let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
         let proof_ty = tc.infer(proof).map_err(|e| format!("tactic_exact: type inference failed: {}", e))?;
@@ -190,10 +210,7 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        // Close proof over local context
-        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, proof.clone(), true);
-        self.assign_mvar(&goal.mvar, closed_proof);
+        self.assign_mvar(&goal.mvar, wrapped_proof);
 
         Ok(())
     }
@@ -236,7 +253,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each premise (reversed so the first premise is the current goal)
         let mut subgoal_mvars: Vec<Expr> = Vec::new();
         for (idx, (_name, _bi, dom)) in premises.iter().enumerate().rev() {
-            let mvar_name = self.push_goal(dom.clone());
+            let mvar_name = self.push_goal(dom.clone(), goal.lctx.clone());
 
             // Create a lambda for the proof term
             let mvar_expr = Expr::mk_mvar(mvar_name.clone());
@@ -259,10 +276,7 @@ impl<'a> TacticEngine<'a> {
             subgoal_mvars.last().unwrap().clone()
         };
 
-        // Close over local context
-        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
-        self.assign_mvar(&goal.mvar, closed_proof);
+        self.assign_mvar(&goal.mvar, proof);
 
         Ok(())
     }
@@ -302,9 +316,7 @@ impl<'a> TacticEngine<'a> {
             a,
         );
 
-        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
-        self.assign_mvar(&goal.mvar, closed_proof);
+        self.assign_mvar(&goal.mvar, proof);
 
         Ok(())
     }
@@ -446,7 +458,7 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each minor premise (in reverse so first is current)
         let mut minor_mvars = Vec::new();
         for minor_ty in minor_types.iter().rev() {
-            let mvar_name = self.push_goal(minor_ty.clone());
+            let mvar_name = self.push_goal(minor_ty.clone(), goal.lctx.clone());
             minor_mvars.push(Expr::mk_mvar(mvar_name));
         }
 
@@ -491,10 +503,7 @@ impl<'a> TacticEngine<'a> {
         // Apply major premise (the induction variable)
         proof = Expr::mk_app(proof, var_expr.clone());
 
-        // Close over local context
-        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
-        self.assign_mvar(&goal.mvar, closed_proof);
+        self.assign_mvar(&goal.mvar, proof);
 
         Ok(())
     }
@@ -526,7 +535,7 @@ impl<'a> TacticEngine<'a> {
     }
 
     /// Rewrite using an equality hypothesis
-    pub fn tactic_rewrite(&mut self, hyp_expr: &Expr) -> Result<(), String> {
+    pub fn tactic_rewrite(&mut self, hyp_expr: &Expr, reverse: bool) -> Result<(), String> {
         let goal = self.current_goal().ok_or("No goals remaining")?;
         let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
 
@@ -545,35 +554,54 @@ impl<'a> TacticEngine<'a> {
         let a = eq_args[1].clone();
         let b = eq_args[2].clone();
 
+        // Determine rewrite direction
+        let (from, to) = if reverse { (b.clone(), a.clone()) } else { (a.clone(), b.clone()) };
+
         // Pop current goal
         let goal = self.pop_goal().unwrap();
         let target = goal.target.clone();
 
-        // Create a new goal: target with a replaced by b
-        let new_target = replace_expr(&target, &a, &b);
-        let new_mvar = self.push_goal(new_target.clone());
+        // Create a new goal: target with 'from' replaced by 'to'
+        let new_target = replace_expr(&target, &from, &to);
+        let new_mvar = self.push_goal(new_target.clone(), goal.lctx.clone());
 
-        // Build eq_subst A a b (fun x => target[x/a]) hyp_expr ?new_goal
-        // eq_subst : forall (A : Type) (a : A) (b : A) (P : A -> Prop),
-        //   Eq A a b -> P a -> P b
-        // We need: eq_subst A a b (fun x => target[x/a]) hyp_expr ?m : target[b/a]
-        let motive_body = replace_expr(&target, &a, &Expr::mk_bvar(0));
+        // Build motive P = fun x => target[x/from]
+        let motive_body = replace_expr(&target, &from, &Expr::mk_bvar(0));
         let motive = Expr::Lambda(Name::new("x"), BinderInfo::Default, Rc::new(a_type.clone()), Rc::new(motive_body));
 
+        // Build a hypothesis of type Eq A to from for eq_subst
+        // eq_subst A a b P h pa has type P b, given h : Eq A a b and pa : P a.
+        // To turn a proof of new_target into a proof of target, we need:
+        //   eq_subst A to from P h_eq ?mvar
+        // where h_eq : Eq A to from and ?mvar : new_target = P to.
+        let hyp_eq = if reverse {
+            // For reverse, hyp_expr : Eq A a b, and from=b, to=a
+            // So hyp_expr : Eq A to from directly
+            hyp_expr.clone()
+        } else {
+            // For forward, hyp_expr : Eq A a b = Eq A from to
+            // We need Eq A to from
+            Expr::mk_app(
+                Expr::mk_app(Expr::mk_app(Expr::mk_app(
+                    Expr::mk_const(Name::new("eq_sym"), vec![]),
+                    a_type.clone()), from.clone()), to.clone()),
+                hyp_expr.clone()
+            )
+        };
+
+        // eq_subst A to from P hyp_eq ?new_mvar
         let proof = Expr::mk_app(
             Expr::mk_app(Expr::mk_app(Expr::mk_app(Expr::mk_app(
                 Expr::mk_const(Name::new("eq_subst"), vec![]),
                 a_type.clone()),
-                a.clone()),
-                b.clone()),
+                to.clone()),
+                from.clone()),
                 motive.clone()),
-            hyp_expr.clone(),
+            hyp_eq,
         );
         let proof = Expr::mk_app(proof, Expr::mk_mvar(new_mvar));
 
-        let fvars: Vec<Expr> = goal.lctx.iter_decls().map(|d| d.mk_ref()).collect();
-        let closed_proof = goal.lctx.mk_lambda(&fvars, proof, true);
-        self.assign_mvar(&goal.mvar, closed_proof);
+        self.assign_mvar(&goal.mvar, proof);
 
         Ok(())
     }

@@ -1,10 +1,10 @@
 // Temporary test file for auto-generated recursor
 #[cfg(test)]
 mod tests {
-    use crate::lean::environment::Environment;
-    use crate::lean::declaration::{Declaration, InductiveType, Constructor};
-    use crate::lean::expr::{Expr, Name, BinderInfo};
-    use crate::lean::type_checker::{TypeChecker, TypeCheckerState};
+    use crate::environment::Environment;
+    use crate::declaration::{Declaration, InductiveType, Constructor};
+    use crate::expr::{Expr, Name, BinderInfo};
+    use crate::type_checker::{TypeChecker, TypeCheckerState};
     use std::rc::Rc;
 
     fn setup_nat_env() -> (Environment, Expr) {

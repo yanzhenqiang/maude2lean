@@ -1,1 +1,10 @@
-pub mod lean;
+pub mod declaration;
+pub mod environment;
+pub mod expr;
+pub mod local_ctx;
+pub mod repl;
+pub mod repl_parser;
+pub mod tactic;
+pub mod test_auto_rec;
+pub mod tui;
+pub mod type_checker;

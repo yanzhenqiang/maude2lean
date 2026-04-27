@@ -1230,7 +1230,7 @@ mod tests {
 
     #[test]
     fn test_generated_recursor_reduces() {
-        use crate::lean::type_checker::*;
+        use crate::type_checker::*;
 
         let mut env = Environment::new();
 
@@ -1300,7 +1300,7 @@ mod tests {
 
     #[test]
     fn test_add_inductive_list() {
-        use crate::lean::type_checker::*;
+        use crate::type_checker::*;
 
         let mut env = Environment::new();
 
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn test_nat_recursor_type_check() {
-        use crate::lean::type_checker::*;
+        use crate::type_checker::*;
 
         let mut env = Environment::new();
         let nat = Expr::mk_const(Name::new("Nat"), vec![]);
@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn test_list_recursor_type_check() {
-        use crate::lean::type_checker::*;
+        use crate::type_checker::*;
 
         let mut env = Environment::new();
         let type0 = Expr::mk_type();
@@ -1567,7 +1567,7 @@ mod tests {
 
     #[test]
     fn test_add_inductive_le() {
-        use crate::lean::type_checker::*;
+        use crate::type_checker::*;
 
         let mut env = Environment::new();
 
