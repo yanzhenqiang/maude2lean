@@ -59,10 +59,9 @@ theorem int_add_ofNat_negSucc_eq : forall (n : Nat), Eq Int (int_add (ofNat (suc
     rec.Nat (fun x : Nat => Eq Int (int_add (ofNat (succ x)) (negSucc x)) (ofNat 0))
       (refl Int (ofNat 0))
       (fun n' : Nat => fun ih : Eq Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0) =>
-        eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
-          (fun y : Int => Eq Int (int_add (ofNat (succ (succ n'))) (negSucc (succ n'))) y)
-          ih
-          (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+        calc (Int)
+          int_add (ofNat (succ (succ n'))) (negSucc (succ n')) = int_add (ofNat (succ n')) (negSucc n') := refl Int (int_add (ofNat (succ n')) (negSucc n'))
+          _ = ofNat 0 := ih)
       n
 
 -- 辅助定理: int_add (negSucc n) (ofNat (succ n)) = ofNat 0
@@ -71,10 +70,9 @@ theorem int_add_negSucc_ofNat_eq : forall (n : Nat), Eq Int (int_add (negSucc n)
     rec.Nat (fun x : Nat => Eq Int (int_add (negSucc x) (ofNat (succ x))) (ofNat 0))
       (refl Int (ofNat 0))
       (fun n' : Nat => fun ih : Eq Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0) =>
-        eq_subst Int (int_add (negSucc n') (ofNat (succ n'))) (ofNat 0)
-          (fun y : Int => Eq Int (int_add (negSucc (succ n')) (ofNat (succ (succ n')))) y)
-          ih
-          (refl Int (int_add (negSucc n') (ofNat (succ n')))))
+        calc (Int)
+          int_add (negSucc (succ n')) (ofNat (succ (succ n'))) = int_add (negSucc n') (ofNat (succ n')) := refl Int (int_add (negSucc n') (ofNat (succ n')))
+          _ = ofNat 0 := ih)
       n
 
 -- int_mul a b = int_mul b a（整数乘法交换律）
@@ -84,20 +82,28 @@ theorem int_mul_comm : forall (a : Int) (b : Int), Eq Int (int_mul a b) (int_mul
       (fun m : Nat =>
         rec.Int (fun y : Int => Eq Int (int_mul (ofNat m) y) (int_mul y (ofNat m)))
           (fun n : Nat =>
-            eq_subst Nat (nat_mul m n) (nat_mul n m)
-              (fun y : Nat => Eq Int (ofNat (nat_mul m n)) (ofNat y))
-              (nat_mul_comm m n)
-              (refl Int (ofNat (nat_mul m n))))
+            calc (Int)
+              int_mul (ofNat m) (ofNat n) = ofNat (nat_mul m n) := refl Int (ofNat (nat_mul m n))
+              _ = ofNat (nat_mul n m) :=
+                eq_subst Nat (nat_mul m n) (nat_mul n m)
+                  (fun y : Nat => Eq Int (ofNat (nat_mul m n)) (ofNat y))
+                  (nat_mul_comm m n)
+                  (refl Int (ofNat (nat_mul m n)))
+              _ = int_mul (ofNat n) (ofNat m) := refl Int (ofNat (nat_mul n m)))
           (fun n : Nat => refl Int (int_mul (ofNat m) (negSucc n)))
           b)
       (fun m : Nat =>
         rec.Int (fun y : Int => Eq Int (int_mul (negSucc m) y) (int_mul y (negSucc m)))
           (fun n : Nat => refl Int (int_mul (negSucc m) (ofNat n)))
           (fun n : Nat =>
-            eq_subst Nat (nat_mul (succ m) (succ n)) (nat_mul (succ n) (succ m))
-              (fun y : Nat => Eq Int (ofNat (nat_mul (succ m) (succ n))) (ofNat y))
-              (nat_mul_comm (succ m) (succ n))
-              (refl Int (ofNat (nat_mul (succ m) (succ n)))))
+            calc (Int)
+              int_mul (negSucc m) (negSucc n) = ofNat (nat_mul (succ m) (succ n)) := refl Int (ofNat (nat_mul (succ m) (succ n)))
+              _ = ofNat (nat_mul (succ n) (succ m)) :=
+                eq_subst Nat (nat_mul (succ m) (succ n)) (nat_mul (succ n) (succ m))
+                  (fun y : Nat => Eq Int (ofNat (nat_mul (succ m) (succ n))) (ofNat y))
+                  (nat_mul_comm (succ m) (succ n))
+                  (refl Int (ofNat (nat_mul (succ m) (succ n))))
+              _ = int_mul (negSucc n) (negSucc m) := refl Int (ofNat (nat_mul (succ n) (succ m))))
           b)
       a
 
@@ -109,16 +115,14 @@ theorem int_sub_self : forall (a : Int), Eq Int (int_sub a a) (ofNat 0) :=
         rec.Nat (fun x : Nat => Eq Int (int_sub (ofNat x) (ofNat x)) (ofNat 0))
           (refl Int (ofNat 0))
           (fun n' : Nat => fun ih : Eq Int (int_sub (ofNat n') (ofNat n')) (ofNat 0) =>
-            eq_subst Int (int_add (ofNat (succ n')) (negSucc n')) (ofNat 0)
-              (fun y : Int => Eq Int (int_add (ofNat (succ n')) (int_neg (ofNat (succ n')))) y)
-              (int_add_ofNat_negSucc_eq n')
-              (refl Int (int_add (ofNat (succ n')) (negSucc n'))))
+            calc (Int)
+              int_sub (ofNat (succ n')) (ofNat (succ n')) = int_add (ofNat (succ n')) (negSucc n') := refl Int (int_add (ofNat (succ n')) (negSucc n'))
+              _ = ofNat 0 := int_add_ofNat_negSucc_eq n')
           n)
       (fun n : Nat =>
-        eq_subst Int (int_add (negSucc n) (ofNat (succ n))) (ofNat 0)
-          (fun y : Int => Eq Int (int_add (negSucc n) (int_neg (negSucc n))) y)
-          (int_add_negSucc_ofNat_eq n)
-          (refl Int (int_add (negSucc n) (ofNat (succ n)))))
+        calc (Int)
+          int_sub (negSucc n) (negSucc n) = int_add (negSucc n) (ofNat (succ n)) := refl Int (int_add (negSucc n) (ofNat (succ n)))
+          _ = ofNat 0 := int_add_negSucc_ofNat_eq n)
       a
 
 -- =====================================================================
