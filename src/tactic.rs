@@ -24,8 +24,13 @@ pub struct TacticEngine<'a> {
     next_mvar_idx: u64,
     /// MVar assignments accumulated during tactic execution
     pub mvar_assignments: HashMap<Name, Expr>,
-    /// Variables introduced by tactic_intro, in order (outermost first)
-    pub introduced_vars: Vec<(Name, Expr)>,
+    /// Variables introduced by tactic_intro, in order (outermost first).
+    /// Each entry is (local_decl_index, fvar_name, type).
+    pub introduced_vars: Vec<(u64, Name, Expr)>,
+    /// Number of theorem parameters (first N intros correspond to params)
+    pub num_params: usize,
+    /// Local decl indices of theorem parameters that have been intro'd
+    pub param_decl_indices: std::collections::HashSet<u64>,
 }
 
 impl<'a> TacticEngine<'a> {
@@ -43,6 +48,8 @@ impl<'a> TacticEngine<'a> {
             next_mvar_idx: 0,
             mvar_assignments: HashMap::new(),
             introduced_vars: Vec::new(),
+            num_params: 0,
+            param_decl_indices: std::collections::HashSet::new(),
         };
         engine.push_goal(initial_target, LocalCtx::new());
         engine
@@ -84,8 +91,38 @@ impl<'a> TacticEngine<'a> {
     }
 
     /// Assign a metavariable to a value
-    pub fn assign_mvar(&mut self, name: &Name, val: Expr) {
-        self.mvar_assignments.insert(name.clone(), val);
+    fn wrap_proof_with_lctx(proof: &Expr, lctx: &LocalCtx) -> Expr {
+        let mut result = proof.clone();
+        let decls: Vec<_> = lctx.iter_decls().collect();
+        for decl in decls.iter().rev() {
+            match decl {
+                LocalDecl::CDecl { name, ty, .. } => {
+                    result = result.abstract_fvar(name, 0);
+                    result = Expr::Lambda(
+                        name.clone(),
+                        BinderInfo::Default,
+                        Rc::new(ty.clone()),
+                        Rc::new(result),
+                    );
+                }
+                LocalDecl::LDecl { name, user_name, ty, value, .. } => {
+                    result = result.abstract_fvar(name, 0);
+                    result = Expr::Let(
+                        user_name.clone(),
+                        Rc::new(ty.clone()),
+                        Rc::new(value.clone()),
+                        Rc::new(result),
+                        false,
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    pub fn assign_mvar(&mut self, name: &Name, val: Expr, lctx: &LocalCtx) {
+        let wrapped = Self::wrap_proof_with_lctx(&val, lctx);
+        self.mvar_assignments.insert(name.clone(), wrapped);
     }
 
     /// Build the final proof term by substituting all MVar assignments
@@ -167,12 +204,19 @@ impl<'a> TacticEngine<'a> {
             Expr::Pi(_, _, dom, body) => {
                 let fvar_name = Name::new(name);
                 let fvar = Expr::mk_fvar(fvar_name.clone());
-                let goal = self.current_goal_mut().ok_or("No goals remaining")?;
-                goal.lctx.mk_local_decl(fvar_name.clone(), Name::new(name), (**dom).clone(), BinderInfo::Default);
+                let decl_index = {
+                    let goal = self.current_goal_mut().ok_or("No goals remaining")?;
+                    let decl = goal.lctx.mk_local_decl(fvar_name.clone(), Name::new(name), (**dom).clone(), BinderInfo::Default);
+                    let idx = decl.get_index();
+                    goal.target = body.instantiate(&fvar);
+                    idx
+                };
 
-                // New target is the body with the bound var replaced by FVar
-                goal.target = body.instantiate(&fvar);
-                self.introduced_vars.push((fvar_name, (**dom).clone()));
+                // If this intro corresponds to a theorem parameter, record its index
+                if self.introduced_vars.len() < self.num_params {
+                    self.param_decl_indices.insert(decl_index);
+                }
+                self.introduced_vars.push((decl_index, fvar_name, (**dom).clone()));
                 Ok(())
             }
             _ => Err(format!("tactic_intro: target is not a Pi type: {}", format_expr(&target_whnf))),
@@ -182,22 +226,6 @@ impl<'a> TacticEngine<'a> {
     /// Close current goal with exact proof term
     pub fn tactic_exact(&mut self, proof: &Expr) -> Result<(), String> {
         let goal = self.pop_goal().ok_or("No goals remaining")?;
-
-        // Wrap proof with let-expressions for all let-bindings in the goal's context
-        let mut wrapped_proof = proof.clone();
-        let decls: Vec<_> = goal.lctx.iter_decls().collect();
-        for decl in decls.iter().rev() {
-            if let LocalDecl::LDecl { name, user_name, ty, value, .. } = decl {
-                wrapped_proof = wrapped_proof.abstract_fvar(name, 0);
-                wrapped_proof = Expr::Let(
-                    user_name.clone(),
-                    Rc::new(ty.clone()),
-                    Rc::new(value.clone()),
-                    Rc::new(wrapped_proof),
-                    false,
-                );
-            }
-        }
 
         let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
         let proof_ty = tc.infer(proof).map_err(|e| format!("tactic_exact: type inference failed: {}", e))?;
@@ -210,7 +238,7 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        self.assign_mvar(&goal.mvar, wrapped_proof);
+        self.assign_mvar(&goal.mvar, proof.clone(), &goal.lctx);
 
         Ok(())
     }
@@ -276,7 +304,7 @@ impl<'a> TacticEngine<'a> {
             subgoal_mvars.last().unwrap().clone()
         };
 
-        self.assign_mvar(&goal.mvar, proof);
+        self.assign_mvar(&goal.mvar, proof, &goal.lctx);
 
         Ok(())
     }
@@ -316,7 +344,7 @@ impl<'a> TacticEngine<'a> {
             a,
         );
 
-        self.assign_mvar(&goal.mvar, proof);
+        self.assign_mvar(&goal.mvar, proof, &goal.lctx);
 
         Ok(())
     }
@@ -393,18 +421,27 @@ impl<'a> TacticEngine<'a> {
         let goal = self.pop_goal().unwrap();
         let target = goal.target.clone();
 
-        // Phase 2: Build proof using tc, then drop it before push_goal
-        let minor_types = {
+        // Determine universe level from target sort (needs full context including var)
+        let u_level = {
             let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-
-            // Determine universe level from target sort
             let target_sort = tc.infer(&target)
                 .map_err(|e| format!("induction: cannot infer target sort: {}", e))?;
             let target_sort_whnf = tc.whnf(&target_sort);
-            let u_level = match &target_sort_whnf {
+            match &target_sort_whnf {
                 Expr::Sort(l) => l.clone(),
                 _ => Level::Zero,
-            };
+            }
+        };
+
+        // Remove the induction variable from the local context for subgoals
+        let mut subgoal_lctx = goal.lctx.clone();
+        if let Some(decl) = subgoal_lctx.find_local_decl(&var_name).cloned() {
+            subgoal_lctx.clear(&decl);
+        }
+
+        // Phase 2: Build proof using tc, then drop it before push_goal
+        let minor_types = {
+            let mut tc = TypeChecker::with_local_ctx(self.st, subgoal_lctx.clone());
 
             // Build motive: λ x. target[x/var]
             let motive = Expr::Lambda(
@@ -435,7 +472,6 @@ impl<'a> TacticEngine<'a> {
             // Infer type of partial application to get minor premise types
             let partial_ty = tc.infer(&proof)
                 .map_err(|e| format!("induction: cannot infer recursor type: {}", e))?;
-
             // Collect minor premise types from the Pi chain
             let mut minor_types = Vec::new();
             let mut current_ty = partial_ty;
@@ -443,7 +479,10 @@ impl<'a> TacticEngine<'a> {
                 let c_whnf = tc.whnf(&current_ty);
                 match &c_whnf {
                     Expr::Pi(_, _, dom, body) => {
-                        minor_types.push((**dom).clone());
+                        // Domain may contain nested unreduced App(Lambda, arg) from
+                        // instantiate in infer_app. Use full nf to get a clean type.
+                        let reduced_dom = tc.nf(dom);
+                        minor_types.push(reduced_dom);
                         current_ty = (**body).clone();
                     }
                     _ => return Err(format!(
@@ -458,21 +497,11 @@ impl<'a> TacticEngine<'a> {
         // Create subgoals for each minor premise (in reverse so first is current)
         let mut minor_mvars = Vec::new();
         for minor_ty in minor_types.iter().rev() {
-            let mvar_name = self.push_goal(minor_ty.clone(), goal.lctx.clone());
+            let mvar_name = self.push_goal(minor_ty.clone(), subgoal_lctx.clone());
             minor_mvars.push(Expr::mk_mvar(mvar_name));
         }
 
         // Reconstruct the proof term
-        let u_level = {
-            let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
-            let target_sort = tc.infer(&target).unwrap_or(Expr::mk_type());
-            let target_sort_whnf = tc.whnf(&target_sort);
-            match &target_sort_whnf {
-                Expr::Sort(l) => l.clone(),
-                _ => Level::Zero,
-            }
-        };
-
         let motive = Expr::Lambda(
             var_name.clone(),
             BinderInfo::Default,
@@ -503,7 +532,7 @@ impl<'a> TacticEngine<'a> {
         // Apply major premise (the induction variable)
         proof = Expr::mk_app(proof, var_expr.clone());
 
-        self.assign_mvar(&goal.mvar, proof);
+        self.assign_mvar(&goal.mvar, proof, &goal.lctx);
 
         Ok(())
     }
@@ -601,7 +630,7 @@ impl<'a> TacticEngine<'a> {
         );
         let proof = Expr::mk_app(proof, Expr::mk_mvar(new_mvar));
 
-        self.assign_mvar(&goal.mvar, proof);
+        self.assign_mvar(&goal.mvar, proof, &goal.lctx);
 
         Ok(())
     }

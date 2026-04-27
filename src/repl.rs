@@ -871,7 +871,7 @@ impl Repl {
         }
 
         // Handle tactic block
-        let (value_expr, introduced_vars) = match &value {
+        let (value_expr, introduced_vars, param_decl_indices) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 if !is_theorem {
                     return Err("Tactic blocks are only allowed in theorems".to_string());
@@ -886,6 +886,7 @@ impl Repl {
                 let env = &self.env;
                 let env_bindings = &self.env_bindings;
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
+                engine.num_params = param_exprs.len();
 
                 for tactic_cmd in tactics {
                     execute_tactic(env, env_bindings, &self.infix_ops, &self.notations, &mut engine, tactic_cmd)?;
@@ -897,44 +898,26 @@ impl Repl {
 
                 let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
                 let proof = engine.build_proof(&root_mvar);
-                (proof, engine.introduced_vars)
+                (proof, engine.introduced_vars, engine.param_decl_indices)
             }
-            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new()),
+            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new(), std::collections::HashSet::new()),
         };
 
         // Embed params into value as lambdas
-        // For tactic blocks, the proof term contains FVars from the local context;
-        // abstract them back to BVars before wrapping lambdas.
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if is_tactic {
-            // Abstract introduced vars that are NOT already in param_exprs
-            // (reverse order: last introduced first)
-            let param_names: std::collections::HashSet<String> =
-                param_exprs.iter().map(|(n, _)| n.clone()).collect();
-            for (name, ty) in introduced_vars.iter().rev() {
-                if param_names.contains(&name.to_string()) {
-                    continue;
-                }
-                final_value = final_value.abstract_fvar(name, 0);
+        if !is_tactic {
+            for (pname, pty) in param_exprs.iter().rev() {
+                // The parser already converts parameter names to BVars via bound_vars,
+                // so we just wrap with lambdas directly. Calling abstract_fvar here
+                // would incorrectly shift existing BVars.
                 final_value = Expr::Lambda(
-                    name.clone(),
+                    Name::new(pname),
                     BinderInfo::Default,
-                    Rc::new(ty.clone()),
+                    Rc::new(pty.clone()),
                     Rc::new(final_value),
                 );
             }
-        }
-        for (pname, pty) in param_exprs.iter().rev() {
-            if is_tactic {
-                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
-            }
-            final_value = Expr::Lambda(
-                Name::new(pname),
-                BinderInfo::Default,
-                Rc::new(pty.clone()),
-                Rc::new(final_value),
-            );
         }
 
         // Determine type
@@ -1045,7 +1028,7 @@ impl Repl {
         let ret_ty_expr = ret_ty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
 
         // Handle tactic block for solve (like theorem does)
-        let (value_expr, introduced_vars) = match &value {
+        let (value_expr, introduced_vars, param_decl_indices) = match &value {
             ParsedExpr::TacticBlock(tactics) => {
                 let mut target_expr = ret_ty_expr.clone();
                 // Wrap target with parameter types as Pi binders
@@ -1056,6 +1039,7 @@ impl Repl {
                 let env = &self.env;
                 let env_bindings = &self.env_bindings;
                 let mut engine = TacticEngine::new(&mut self.tc_state, env, env_bindings, target_expr);
+                engine.num_params = param_exprs.len();
 
                 for tactic_cmd in tactics {
                     execute_tactic(env, env_bindings, &self.infix_ops, &self.notations, &mut engine, tactic_cmd)?;
@@ -1067,43 +1051,26 @@ impl Repl {
 
                 let root_mvar = Expr::mk_mvar(Name::new("_tactic_mvar_0"));
                 let proof = engine.build_proof(&root_mvar);
-                (proof, engine.introduced_vars)
+                (proof, engine.introduced_vars, engine.param_decl_indices)
             }
-            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new()),
+            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new(), std::collections::HashSet::new()),
         };
 
         // Embed params into value as lambdas
-        // For tactic blocks, abstract FVars from the local context back to BVars.
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if is_tactic {
-            // Abstract introduced vars that are NOT already in param_exprs
-            // (reverse order: last introduced first)
-            let param_names: std::collections::HashSet<String> =
-                param_exprs.iter().map(|(n, _)| n.clone()).collect();
-            for (name, ty) in introduced_vars.iter().rev() {
-                if param_names.contains(&name.to_string()) {
-                    continue;
-                }
-                final_value = final_value.abstract_fvar(name, 0);
+        if !is_tactic {
+            for (pname, pty) in param_exprs.iter().rev() {
+                // The parser already converts parameter names to BVars via bound_vars,
+                // so we just wrap with lambdas directly. Calling abstract_fvar here
+                // would incorrectly shift existing BVars.
                 final_value = Expr::Lambda(
-                    name.clone(),
+                    Name::new(pname),
                     BinderInfo::Default,
-                    Rc::new(ty.clone()),
+                    Rc::new(pty.clone()),
                     Rc::new(final_value),
                 );
             }
-        }
-        for (pname, pty) in param_exprs.iter().rev() {
-            if is_tactic {
-                final_value = final_value.abstract_fvar(&Name::new(pname), 0);
-            }
-            final_value = Expr::Lambda(
-                Name::new(pname),
-                BinderInfo::Default,
-                Rc::new(pty.clone()),
-                Rc::new(final_value),
-            );
         }
 
         // Build final type: Pi params, ret_ty
