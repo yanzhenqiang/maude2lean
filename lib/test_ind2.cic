@@ -1,5 +1,0 @@
-import Nat
-import Eq
-
-theorem test_ind2 : Eq Nat zero zero := by
-  rfl
