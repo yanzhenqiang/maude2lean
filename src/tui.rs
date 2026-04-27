@@ -421,7 +421,6 @@ fn format_expr(e: &Expr) -> String {
             format!("let _ : {} := {} in {}", format_expr(ty), format_expr(val), format_expr(body))
         }
         Expr::Sort(l) => format!("Sort({:?})", l),
-        Expr::Lit(Literal::Nat(n)) => n.to_string(),
         Expr::MVar(name) => format!("?{}", name.to_string()),
         Expr::Proj(name, idx, e) => format!("proj({}, {}, {})", name.to_string(), idx, format_expr(e)),
         _ => format!("{:?}", e),

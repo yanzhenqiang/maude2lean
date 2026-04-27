@@ -296,7 +296,6 @@ fn format_expr(e: &lean_cauchy_kernel::expr::Expr) -> String {
             format!("let _ : {} := {} in {}", format_expr(ty), format_expr(val), format_expr(body))
         }
         Expr::Sort(l) => format!("Sort({:?})", l),
-        Expr::Lit(Literal::Nat(n)) => n.to_string(),
         _ => format!("{:?}", e),
     }
 }

@@ -199,7 +199,6 @@ impl BinderInfo {
 /// Literal values
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
-    Nat(u64),
     String(String),
 }
 

@@ -285,7 +285,6 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Lit(lit) => {
                 match lit {
-                    Literal::Nat(_) => Ok(Expr::mk_const(Name::new("Nat"), vec![])),
                     Literal::String(_) => Ok(Expr::mk_const(Name::new("String"), vec![])),
                 }
             }
@@ -401,11 +400,8 @@ impl<'a> TypeChecker<'a> {
                     e.clone()
                 }
             }
-            Expr::Lit(lit) => {
-                match lit {
-                    Literal::Nat(n) => Self::nat_lit_to_expr(*n),
-                    _ => e.clone(),
-                }
+            Expr::Lit(_) => {
+                e.clone()
             }
             Expr::FVar(name) => {
                 if let Some(value) = self.lctx.get_value(&Expr::FVar(name.clone())).cloned() {
@@ -463,16 +459,6 @@ impl<'a> TypeChecker<'a> {
                 e.clone()
             }
         }
-    }
-
-    fn nat_lit_to_expr(n: u64) -> Expr {
-        let succ = Expr::mk_const(Name::new("succ"), vec![]);
-        let zero = Expr::mk_const(Name::new("zero"), vec![]);
-        let mut result = zero;
-        for _ in 0..n {
-            result = Expr::mk_app(succ.clone(), result);
-        }
-        result
     }
 
     fn reduce_recursor(&mut self, e: &Expr) -> Option<Expr> {

@@ -26,7 +26,6 @@ pub enum ParsedExpr {
     Pi(String, Box<ParsedExpr>, Box<ParsedExpr>),     // name, type, body
     Let(String, Box<ParsedExpr>, Box<ParsedExpr>, Box<ParsedExpr>), // name, ty, val, body
     Sort(u64), // 0 = Prop, 1 = Type
-    NatLit(u64),
     /// match scrutinee : motive with | pat1 => e1 | pat2 x => e2
     Match(Box<ParsedExpr>, Box<ParsedExpr>, Vec<(ParsedExpr, ParsedExpr)>),
     /// by tactic1; tactic2; ...
@@ -100,7 +99,6 @@ impl ParsedExpr {
                     Expr::mk_type()
                 }
             }
-            ParsedExpr::NatLit(n) => Expr::Lit(Literal::Nat(*n)),
             ParsedExpr::Match(scrutinee, motive, branches) => {
                 self.desugar_match(scrutinee, motive, branches, env_bindings, env, bound_vars)
             }
@@ -1842,7 +1840,12 @@ impl Parser {
                 break;
             }
         }
-        Ok(ParsedExpr::NatLit(num))
+        // Expand numeric literal to succ^n zero directly in parser
+        let mut result = ParsedExpr::Const("zero".to_string());
+        for _ in 0..num {
+            result = ParsedExpr::App(Box::new(ParsedExpr::Const("succ".to_string())), Box::new(result));
+        }
+        Ok(result)
     }
 
     fn parse_ident_or_bvar(&mut self) -> Result<ParsedExpr, String> {
@@ -2015,8 +2018,17 @@ mod tests {
 
     #[test]
     fn test_parse_nat_lit() {
-        let e = parse("42");
-        assert!(matches!(e, ParsedExpr::NatLit(42)));
+        let e = parse("3");
+        // Should expand to App(App(App(Const("succ"), Const("succ")), Const("succ")), Const("zero"))
+        let mut current = e;
+        let mut count = 0;
+        while let ParsedExpr::App(f, a) = current {
+            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == "succ"));
+            current = *a;
+            count += 1;
+        }
+        assert!(matches!(current, ParsedExpr::Const(name) if name == "zero"));
+        assert_eq!(count, 3);
     }
 
     #[test]
@@ -2166,14 +2178,14 @@ mod tests {
     #[test]
     fn test_parse_infix_add() {
         let e = parse("2 + 3");
-        // Should desugar to add 2 3 = App(App(Const("add"), NatLit(2)), NatLit(3))
+        // Should desugar to add 2 3 = App(App(Const("add"), succ(succ(zero))), succ(succ(succ(zero))))
         match e {
             ParsedExpr::App(f, rhs) => {
                 match f.as_ref() {
                     ParsedExpr::App(op, lhs) => {
                         assert!(matches!(op.as_ref(), ParsedExpr::Const(name) if name == "add"));
-                        assert!(matches!(lhs.as_ref(), ParsedExpr::NatLit(2)));
-                        assert!(matches!(rhs.as_ref(), ParsedExpr::NatLit(3)));
+                        assert!(is_nat_lit(lhs.as_ref(), 2));
+                        assert!(is_nat_lit(rhs.as_ref(), 3));
                     }
                     _ => panic!("Expected App(App(add, 2), 3)"),
                 }
@@ -2191,15 +2203,15 @@ mod tests {
                 match f.as_ref() {
                     ParsedExpr::App(op, lhs) => {
                         assert!(matches!(op.as_ref(), ParsedExpr::Const(name) if name == "add"));
-                        assert!(matches!(lhs.as_ref(), ParsedExpr::NatLit(2)));
+                        assert!(is_nat_lit(lhs.as_ref(), 2));
                         // rhs should be mul 3 4
                         match rhs.as_ref() {
                             ParsedExpr::App(f2, rhs2) => {
                                 match f2.as_ref() {
                                     ParsedExpr::App(op2, lhs2) => {
                                         assert!(matches!(op2.as_ref(), ParsedExpr::Const(name) if name == "mul"));
-                                        assert!(matches!(lhs2.as_ref(), ParsedExpr::NatLit(3)));
-                                        assert!(matches!(rhs2.as_ref(), ParsedExpr::NatLit(4)));
+                                        assert!(is_nat_lit(lhs2.as_ref(), 3));
+                                        assert!(is_nat_lit(rhs2.as_ref(), 4));
                                     }
                                     _ => panic!("Expected mul"),
                                 }
@@ -2212,6 +2224,20 @@ mod tests {
             }
             _ => panic!("Expected App"),
         }
+    }
+
+    /// Check if a ParsedExpr is succ^n zero
+    fn is_nat_lit(e: &ParsedExpr, n: u64) -> bool {
+        let mut current = e;
+        let mut count = 0;
+        while let ParsedExpr::App(f, a) = current {
+            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == "succ") {
+                return false;
+            }
+            current = a;
+            count += 1;
+        }
+        matches!(current, ParsedExpr::Const(name) if name == "zero") && count == n
     }
 
     #[test]
