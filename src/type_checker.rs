@@ -359,17 +359,16 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Check if an expression's type is Prop (i.e., Sort(0)).
-    /// This checks if `e` is a proposition (inhabits Prop), NOT if `e` itself is Prop.
-    /// Note: Prop itself is a universe (Type), not a proposition.
+    /// Check if an expression inhabits a proposition (its type has type Prop/Sort(0)).
+    /// For p : P, we check that P : Prop.
     fn is_prop_type(&mut self, e: &Expr) -> bool {
-        // We only check if e's type is Prop.
-        // We do NOT check if e itself is Sort(0), because Prop : Type, not Prop : Prop.
         if let Ok(ty) = self.infer(e) {
-            let ty_whnf = self.whnf(&ty);
-            if let Ok(sort) = self.ensure_sort(&ty_whnf) {
-                if let Ok(lvl) = self.sort_level(&sort) {
-                    return lvl.is_zero();
+            if let Ok(ty_ty) = self.infer(&ty) {
+                let ty_ty_whnf = self.whnf(&ty_ty);
+                if let Ok(sort) = self.ensure_sort(&ty_ty_whnf) {
+                    if let Ok(lvl) = self.sort_level(&sort) {
+                        return lvl.is_zero();
+                    }
                 }
             }
         }
@@ -739,12 +738,11 @@ impl<'a> TypeChecker<'a> {
             return true;
         }
 
-        // Proof irrelevance removed: the previous implementation incorrectly
-        // treated any two Prop-typed expressions as definitionally equal,
-        // which made distinct propositions (e.g. Eq A a b and Eq A c d)
-        // unify. Proper proof irrelevance requires distinguishing proof
-        // terms from proposition types, which this simplified checker does
-        // not do accurately.
+        // Proof irrelevance: any two expressions inhabiting Prop are definitionally equal.
+        // This is a simplified treatment where all proof terms are identified.
+        if self.is_prop_type(&t_n) && self.is_prop_type(&s_n) {
+            return true;
+        }
 
         self.st.failure_cache.insert(pair, false);
         false
