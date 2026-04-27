@@ -547,8 +547,10 @@ impl Repl {
                 let mut ctor_exprs = Vec::new();
                 for (ctor_name, ctor_ty) in &wrapped_ctors {
                     let ctor_ty_expr = ctor_ty.to_expr(&self.env_bindings, &self.env, &mut Vec::new());
+                    // Global rule: constructors are always namespaced as Type.ctor.
+                    let full_ctor_name = Name::new(&name).extend(ctor_name);
                     ctor_exprs.push(Constructor {
-                        name: Name::new(ctor_name),
+                        name: full_ctor_name,
                         ty: ctor_ty_expr,
                     });
                 }
@@ -644,8 +646,7 @@ impl Repl {
                 self.tc_state = TypeCheckerState::new(self.env.clone());
 
                 // Register constructors and recursor in bindings
-                // Simple inductive uses bare constructor names (zero, succ).
-                // Namespacing is only needed for mutual inductive (Even.zero vs Odd.zero).
+                // Constructors are always namespaced as Type.ctor globally.
                 let info = self.env.find(&ind_name).unwrap();
                 if let Some(ind_val) = info.to_inductive_val() {
                     for ctor_name in &ind_val.ctors {

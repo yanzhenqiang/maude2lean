@@ -365,10 +365,10 @@ impl<'a> TacticEngine<'a> {
             ));
         }
 
-        // Build refl proof: refl A a
+        // Build refl proof: Eq.refl A a
         let mut proof = Expr::mk_app(
             Expr::mk_app(
-                Expr::mk_const(Name::new("refl"), vec![]),
+                Expr::mk_const(Name::new("Eq").extend("refl"), vec![]),
                 a_type,
             ),
             a,

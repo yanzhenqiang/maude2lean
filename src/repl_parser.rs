@@ -53,11 +53,33 @@ impl ParsedExpr {
                         return Expr::mk_bvar((bound_vars.len() - 1 - i) as u64);
                     }
                 }
-                // Check environment constants
+                // Check environment constants (exact match)
                 if let Some(e) = env_bindings.get(name) {
                     return e.clone();
                 }
-                // Parse hierarchical names like "rec.Nat"
+                // Namespace resolution: bare constructor names are resolved to Type.ctor
+                // by matching the last component of registered namespaced constructors.
+                let mut candidates = Vec::new();
+                for (key, expr) in env_bindings.iter() {
+                    if let Some(pos) = key.rfind('.') {
+                        if &key[pos + 1..] == name {
+                            if let Expr::Const(ref cname, _) = expr {
+                                if let Some(info) = env.find(cname) {
+                                    if info.is_constructor() {
+                                        candidates.push(expr.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if candidates.len() == 1 {
+                    return candidates[0].clone();
+                }
+                if candidates.len() > 1 {
+                    panic!("Ambiguous constructor name '{}': multiple matches", name);
+                }
+                // Fallback: parse as hierarchical name
                 let name_parts: Vec<&str> = name.split('.').collect();
                 let mut lean_name = Name::new(name_parts[0]);
                 for part in &name_parts[1..] {
@@ -159,10 +181,41 @@ impl ParsedExpr {
         }
     }
 
+    /// Resolve a bare constructor name to its fully-qualified Name using env_bindings.
+    /// Returns None if no unique match is found.
+    fn resolve_ctor_name(bare: &str, env_bindings: &HashMap<String, Expr>, env: &Environment) -> Option<Name> {
+        let mut candidates = Vec::new();
+        for (key, expr) in env_bindings.iter() {
+            if let Some(pos) = key.rfind('.') {
+                if &key[pos + 1..] == bare {
+                    if let Expr::Const(ref cname, _) = expr {
+                        if let Some(info) = env.find(cname) {
+                            if info.is_constructor() {
+                                candidates.push(cname.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if candidates.len() == 1 {
+            Some(candidates[0].clone())
+        } else {
+            None
+        }
+    }
+
     fn desugar_match(&self, scrutinee: &ParsedExpr, motive: &ParsedExpr, branches: &[(ParsedExpr, ParsedExpr)], env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>) -> Expr {
         // Extract constructor info from first pattern
         let (first_ctor_name, _) = extract_ctor_and_vars(&branches[0].0);
-        let ctor_name_obj = Name::new(&first_ctor_name);
+        let mut ctor_name_obj = Name::new(&first_ctor_name);
+
+        // If bare name not found, try namespace resolution via env_bindings
+        if env.find(&ctor_name_obj).is_none() {
+            if let Some(resolved) = Self::resolve_ctor_name(&first_ctor_name, env_bindings, env) {
+                ctor_name_obj = resolved;
+            }
+        }
 
         let ctor_info = match env.find(&ctor_name_obj) {
             Some(info) => info,
@@ -212,7 +265,14 @@ impl ParsedExpr {
             let branch = branches.iter()
                 .find(|(pat, _)| {
                     let (c, _) = extract_ctor_and_vars(pat);
-                    c == ctor_name_str
+                    if c == ctor_name_str {
+                        return true;
+                    }
+                    // Namespace resolution: resolve bare pattern name
+                    if let Some(resolved) = Self::resolve_ctor_name(&c, env_bindings, env) {
+                        return resolved.to_string() == ctor_name_str;
+                    }
+                    false
                 })
                 .unwrap_or_else(|| panic!("Missing branch for constructor: {}", ctor_name_str));
 
@@ -1840,10 +1900,10 @@ impl Parser {
                 break;
             }
         }
-        // Expand numeric literal to succ^n zero directly in parser
-        let mut result = ParsedExpr::Const("zero".to_string());
+        // Expand numeric literal to Nat.succ^n Nat.zero directly in parser
+        let mut result = ParsedExpr::Const("Nat.zero".to_string());
         for _ in 0..num {
-            result = ParsedExpr::App(Box::new(ParsedExpr::Const("succ".to_string())), Box::new(result));
+            result = ParsedExpr::App(Box::new(ParsedExpr::Const("Nat.succ".to_string())), Box::new(result));
         }
         Ok(result)
     }
@@ -2023,11 +2083,11 @@ mod tests {
         let mut current = e;
         let mut count = 0;
         while let ParsedExpr::App(f, a) = current {
-            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == "succ"));
+            assert!(matches!(f.as_ref(), ParsedExpr::Const(name) if name == "Nat.succ"));
             current = *a;
             count += 1;
         }
-        assert!(matches!(current, ParsedExpr::Const(name) if name == "zero"));
+        assert!(matches!(current, ParsedExpr::Const(name) if name == "Nat.zero"));
         assert_eq!(count, 3);
     }
 
@@ -2153,7 +2213,7 @@ mod tests {
         // fun _ => Nat -> Nat should parse correctly
         let e = parse("fun _ => Nat -> Nat");
         match e {
-            ParsedExpr::Lambda(name, ty, body) => {
+            ParsedExpr::Lambda(name, _ty, body) => {
                 assert_eq!(name, "_");
                 // body should be Nat -> Nat = Pi(_, Nat, Nat)
                 match body.as_ref() {
@@ -2231,13 +2291,13 @@ mod tests {
         let mut current = e;
         let mut count = 0;
         while let ParsedExpr::App(f, a) = current {
-            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == "succ") {
+            if !matches!(f.as_ref(), ParsedExpr::Const(name) if name == "Nat.succ") {
                 return false;
             }
             current = a;
             count += 1;
         }
-        matches!(current, ParsedExpr::Const(name) if name == "zero") && count == n
+        matches!(current, ParsedExpr::Const(name) if name == "Nat.zero") && count == n
     }
 
     #[test]

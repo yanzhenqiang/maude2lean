@@ -1772,7 +1772,7 @@ mod tests {
         let mut st = TypeCheckerState::new(env);
         let mut tc = TypeChecker::new(&mut st);
 
-        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let _nat = Expr::mk_const(Name::new("Nat"), vec![]);
         let zero = Expr::mk_const(Name::new("zero"), vec![]);
         let mvar = Expr::mk_mvar(Name::new("m1"));
 
@@ -1791,7 +1791,7 @@ mod tests {
         let mut tc = TypeChecker::new(&mut st);
 
         let mvar = Expr::mk_mvar(Name::new("m1"));
-        let nat = Expr::mk_const(Name::new("Nat"), vec![]);
+        let _nat = Expr::mk_const(Name::new("Nat"), vec![]);
         let succ = Expr::mk_const(Name::new("succ"), vec![]);
         // ?m = succ ?m should fail (cyclic)
         let cyclic = Expr::mk_app(succ.clone(), mvar.clone());
