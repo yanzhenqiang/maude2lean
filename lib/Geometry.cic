@@ -355,3 +355,123 @@ def perpendicular_bisector (A : Point) (B : Point) : Prop :=
 -- Existence of perpendicular bisector (axiom for now)
 axiom perpendicular_bisector_exists : forall (A : Point) (B : Point),
   Not (Eq Point A B) -> perpendicular_bisector A B
+
+-- =====================================================================
+-- 15. SSS congruence criterion
+-- =====================================================================
+
+-- SSS: If three sides of one triangle are congruent to three sides of another,
+-- then all corresponding angles are congruent (triangles are congruent)
+axiom SSS : forall (A B C A' B' C' : Point),
+  seg_congruent A B A' B' ->
+  seg_congruent B C B' C' ->
+  seg_congruent C A C' A' ->
+  And (angle_congruent B A C B' A' C')
+    (And (angle_congruent A B C A' B' C')
+      (angle_congruent A C B A' C' B'))
+
+-- =====================================================================
+-- 16. Additional collinearity theorems
+-- =====================================================================
+
+theorem collinear_perm2 : forall (A : Point), forall (B : Point), forall (C : Point),
+  collinear A B C -> collinear A C B := by
+  intro A
+  intro B
+  intro C
+  intro h
+  exact h
+
+theorem collinear_perm3 : forall (A : Point), forall (B : Point), forall (C : Point),
+  collinear A B C -> collinear C B A := by
+  intro A
+  intro B
+  intro C
+  intro h
+  exact h
+
+-- =====================================================================
+-- 17. Perpendicular lines
+-- =====================================================================
+
+-- Two lines are perpendicular if they intersect at a right angle
+def perpendicular (l : Line) (m : Line) : Prop :=
+  exists (P : Point),
+    And (on_line P l)
+      (And (on_line P m)
+        (exists (A : Point), exists (B : Point),
+          And (on_line A l) (And (on_line B m)
+            (And (Not (Eq Point P A)) (And (Not (Eq Point P B))
+              (right_angle A P B))))))
+
+-- =====================================================================
+-- 18. Circle
+-- =====================================================================
+
+-- Circle with center O and radius r (where r is a segment from O to some point)
+def circle (O : Point) (A : Point) : Prop :=
+  Not (Eq Point O A)
+
+-- Point lies on circle: distance from center equals radius
+def on_circle (P : Point) (O : Point) (A : Point) : Prop :=
+  seg_congruent O P O A
+
+-- =====================================================================
+-- 19. Triangle classifications
+-- =====================================================================
+
+-- Right triangle: has a right angle
+def right_triangle (A : Point) (B : Point) (C : Point) : Prop :=
+  Or (right_angle B A C)
+    (Or (right_angle A B C)
+      (right_angle A C B))
+
+-- Acute triangle: all angles are smaller than a right angle
+-- (Simplified: not a right triangle and not obtuse)
+def acute_triangle (A : Point) (B : Point) (C : Point) : Prop :=
+  And (triangle A B C)
+    (And (Not (right_angle B A C))
+      (And (Not (right_angle A B C))
+        (Not (right_angle A C B))))
+
+-- Obtuse triangle: one angle is greater than a right angle
+-- (Simplified as: triangle that is not right and not acute)
+def obtuse_triangle (A : Point) (B : Point) (C : Point) : Prop :=
+  And (triangle A B C)
+    (And (Not (acute_triangle A B C))
+      (Not (right_triangle A B C)))
+
+-- =====================================================================
+-- 20. Quadrilateral definitions
+-- =====================================================================
+
+-- Four points form a quadrilateral (no three collinear)
+def quadrilateral (A : Point) (B : Point) (C : Point) (D : Point) : Prop :=
+  And (Not (collinear A B C))
+    (And (Not (collinear B C D))
+      (And (Not (collinear C D A))
+        (Not (collinear D A B))))
+
+-- Parallelogram: both pairs of opposite sides parallel
+def parallelogram (A : Point) (B : Point) (C : Point) (D : Point) : Prop :=
+  exists (l : Line), exists (m : Line), exists (n : Line), exists (p : Line),
+    And (on_line A l) (And (on_line B l)
+      (And (on_line B m) (And (on_line C m)
+        (And (on_line C n) (And (on_line D n)
+          (And (on_line D p) (And (on_line A p)
+            (And (parallel l n) (parallel m p)))))))))
+
+-- Rectangle: parallelogram with a right angle
+def rectangle (A : Point) (B : Point) (C : Point) (D : Point) : Prop :=
+  And (parallelogram A B C D)
+    (right_angle D A B)
+
+-- =====================================================================
+-- 21. Derived theorems from SSS
+-- =====================================================================
+
+-- Isosceles triangle: base angles are equal (already proven via SAS)
+-- Here is an alternative statement using the midpoint
+def isosceles_alt (A : Point) (B : Point) (C : Point) : Prop :=
+  And (seg_congruent A B A C)
+    (exists (M : Point), midpoint M B C)
