@@ -128,29 +128,37 @@ def collinear (A : Point) (B : Point) (C : Point) : Prop :=
 
 -- Betweenness implies collinearity
 theorem between_implies_collinear : forall (A : Point), forall (B : Point), forall (C : Point),
-  between A B C -> collinear A B C :=
-  fun A : Point => fun B : Point => fun C : Point => fun h : between A B C =>
-    and_snd (Not (Eq Point A C))
-      (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l)))
-      (and_snd (Not (Eq Point B C))
-        (And (Not (Eq Point A C)) (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l))))
-        (and_snd (Not (Eq Point A B))
-          (And (Not (Eq Point B C)) (And (Not (Eq Point A C)) (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l)))))
-          (between_collinear A B C h)))
+  between A B C -> collinear A B C := by
+  intro A
+  intro B
+  intro C
+  intro h
+  exact (and_snd (Not (Eq Point A C))
+    (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l)))
+    (and_snd (Not (Eq Point B C))
+      (And (Not (Eq Point A C)) (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l))))
+      (and_snd (Not (Eq Point A B))
+        (And (Not (Eq Point B C)) (And (Not (Eq Point A C)) (exists (l : Line), And (on_line A l) (And (on_line B l) (on_line C l)))))
+        (between_collinear A B C h))))
 
 -- And is symmetric in its arguments
-theorem and_swap : forall (P : Prop), forall (Q : Prop), And P Q -> And Q P :=
-  fun P : Prop => fun Q : Prop => fun h : And P Q =>
-    And.conj Q P (and_snd P Q h) (and_fst P Q h)
+theorem and_swap : forall (P : Prop), forall (Q : Prop), And P Q -> And Q P := by
+  intro P
+  intro Q
+  intro h
+  exact (And.conj Q P (and_snd P Q h) (and_fst P Q h))
 
 -- Parallelism is symmetric
 theorem parallel_sym : forall (l : Line), forall (m : Line),
-  parallel l m -> parallel m l :=
-  fun l : Line => fun m : Line => fun h : parallel l m =>
-    fun P : Point => fun h2 : And (on_line P m) (on_line P l) =>
-      h P (And.conj (on_line P l) (on_line P m)
-        (and_snd (on_line P m) (on_line P l) h2)
-        (and_fst (on_line P m) (on_line P l) h2))
+  parallel l m -> parallel m l := by
+  intro l
+  intro m
+  intro h
+  intro P
+  intro h2
+  exact (h P (And.conj (on_line P l) (on_line P m)
+    (and_snd (on_line P m) (on_line P l) h2)
+    (and_fst (on_line P m) (on_line P l) h2)))
 
 -- Segment: two points determine a segment (existence of a line through them)
 def segment (A : Point) (B : Point) : Prop :=
@@ -173,29 +181,33 @@ def parallel_through (l : Line) (P : Point) (h : Not (on_line P l)) : Line :=
 
 -- The constructed line passes through P
 theorem parallel_through_on_line : forall (l : Line), forall (P : Point), forall (h : Not (on_line P l)),
-  on_line P (parallel_through l P h) :=
-  fun l : Line => fun P : Point => fun h : Not (on_line P l) =>
-    and_fst (on_line P (parallel_through l P h))
+  on_line P (parallel_through l P h) := by
+  intro l
+  intro P
+  intro h
+  exact (and_fst (on_line P (parallel_through l P h))
+    (And (parallel l (parallel_through l P h))
+      (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line (parallel_through l P h) m'))
+    (choice_spec Line
+      (fun m : Line => And (on_line P m) (And (parallel l m)
+        (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line m m')))
+      (playfair l P h)))
+
+-- The constructed line is parallel to l
+theorem parallel_through_parallel : forall (l : Line), forall (P : Point), forall (h : Not (on_line P l)),
+  parallel l (parallel_through l P h) := by
+  intro l
+  intro P
+  intro h
+  exact (and_fst (parallel l (parallel_through l P h))
+    (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line (parallel_through l P h) m')
+    (and_snd (on_line P (parallel_through l P h))
       (And (parallel l (parallel_through l P h))
         (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line (parallel_through l P h) m'))
       (choice_spec Line
         (fun m : Line => And (on_line P m) (And (parallel l m)
           (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line m m')))
-        (playfair l P h))
-
--- The constructed line is parallel to l
-theorem parallel_through_parallel : forall (l : Line), forall (P : Point), forall (h : Not (on_line P l)),
-  parallel l (parallel_through l P h) :=
-  fun l : Line => fun P : Point => fun h : Not (on_line P l) =>
-    and_fst (parallel l (parallel_through l P h))
-      (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line (parallel_through l P h) m')
-      (and_snd (on_line P (parallel_through l P h))
-        (And (parallel l (parallel_through l P h))
-          (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line (parallel_through l P h) m'))
-        (choice_spec Line
-          (fun m : Line => And (on_line P m) (And (parallel l m)
-            (forall (m' : Line), on_line P m' -> parallel l m' -> Eq Line m m')))
-          (playfair l P h)))
+        (playfair l P h))))
 
 -- -----------------------------------------------------------------
 -- 10. Additional geometric definitions
@@ -275,13 +287,16 @@ axiom ASA : forall (A B C A' B' C' : Point),
 --   AB = AC (given), ∠BAC = ∠CAB (same angle), AC = AB (given)
 -- Therefore △ABC ≅ △ACB, so ∠ABC = ∠ACB.
 theorem isosceles_base_angles : forall (A B C : Point),
-  isosceles A B C -> angle_congruent A B C A C B :=
-  fun A : Point => fun B : Point => fun C : Point => fun h : isosceles A B C =>
-    and_fst (angle_congruent A B C A C B)
-      (angle_congruent A C B A B C)
-      (and_snd (seg_congruent B C C B)
-        (And (angle_congruent A B C A C B) (angle_congruent A C B A B C))
-        (SAS A B C A C B h (angle_trans B A C B A C C A B (angle_refl A B C) (angle_vertex_swap A B C)) (congruent_sym A B A C h)))
+  isosceles A B C -> angle_congruent A B C A C B := by
+  intro A
+  intro B
+  intro C
+  intro h
+  exact (and_fst (angle_congruent A B C A C B)
+    (angle_congruent A C B A B C)
+    (and_snd (seg_congruent B C C B)
+      (And (angle_congruent A B C A C B) (angle_congruent A C B A B C))
+      (SAS A B C A C B h (angle_trans B A C B A C C A B (angle_refl A B C) (angle_vertex_swap A B C)) (congruent_sym A B A C h))))
 
 -- =====================================================================
 -- 13. Right angle and parallel line properties
