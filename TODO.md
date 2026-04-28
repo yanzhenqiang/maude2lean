@@ -23,14 +23,12 @@
 ## In Progress / Next Tasks
 
 ### 1. Euclidean Geometry Theorems
-- **Status**: `lib/Geometry.cic` has Hilbert-style axioms (I1-I3 incidence, O1-O4 order, C1-C5 congruence, Playfair parallel), basic definitions (collinear, segment, triangle, ray, midpoint, isosceles, equilateral), and sample theorems.
-- **Blocker**: To prove SSS/SAS/ASA, angle sum, isosceles base angles, etc., we need additional axioms/definitions for angles and angle congruence, which are not yet in the system.
+- **Status**: `lib/Geometry.cic` has Hilbert-style axioms (I1-I3 incidence, O1-O4 order, C1-C5 congruence, Playfair parallel), angle axioms (Hilbert Group III), SAS/ASA, and basic theorems (isosceles base angles). Midpoint uniqueness is temporarily an axiom pending SSS proof.
+- **Blocker**: To prove SSS and midpoint uniqueness, we need additional congruence lemmas not yet in the system.
 - **Next steps**:
-  1. Add angle definitions and angle congruence axioms
-  2. Prove triangle congruence criteria (SSS, SAS, ASA)
-  3. Prove sum of angles in a triangle = 180 degrees
-  4. Prove isosceles triangle base angles are equal
-  5. Prove midpoint uniqueness and perpendicular bisector existence
+  1. Prove SSS congruence criterion
+  2. Convert midpoint_unique from axiom to theorem (needs SSS)
+  3. Prove sum of angles in a triangle = 180 degrees (needs more angle lemmas)
 
 ### 2. Real Analysis Library
 - **Goal**: Build real analysis on top of existing real number construction (Frac -> Real via Cauchy sequences).
@@ -66,3 +64,5 @@
 - [x] Clean up debug output `.txt` files
 - [x] Remove duplicate match-based Nat library files
 - [x] Clean up temporary `lib/test.cic` file
+- [x] Complete Euclidean geometry axioms and theorems (angle axioms, SAS/ASA, isosceles base angles)
+- [x] Fix inline `--` comment parsing inside expressions (`skip_whitespace` now skips comments)
