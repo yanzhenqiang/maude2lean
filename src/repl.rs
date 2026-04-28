@@ -910,7 +910,7 @@ impl Repl {
                 let proof = engine.build_proof(&root_mvar);
                 (proof, engine.introduced_vars, engine.param_decl_indices)
             }
-            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new(), std::collections::HashSet::new()),
+            _ => (value.to_expr_with_fn(&self.env_bindings, &self.env, &mut bound_vars, Some(&name)), Vec::new(), std::collections::HashSet::new()),
         };
 
         // Embed params into value as lambdas
@@ -1108,7 +1108,7 @@ impl Repl {
                 let proof = engine.build_proof(&root_mvar);
                 (proof, engine.introduced_vars, engine.param_decl_indices)
             }
-            _ => (value.to_expr(&self.env_bindings, &self.env, &mut bound_vars), Vec::new(), std::collections::HashSet::new()),
+            _ => (value.to_expr_with_fn(&self.env_bindings, &self.env, &mut bound_vars, Some(&name)), Vec::new(), std::collections::HashSet::new()),
         };
 
         // Embed params into value as lambdas
@@ -1604,13 +1604,13 @@ impl Repl {
     }
 
     /// Extract internal state for external tools (e.g., TUI).
-    pub fn into_state(self) -> (Environment, TypeCheckerState, HashMap<String, Expr>) {
-        (self.env, self.tc_state, self.env_bindings)
+    pub fn into_state(self) -> (Environment, TypeCheckerState, HashMap<String, Expr>, HashMap<String, (i32, String, bool)>, HashMap<String, super::repl_parser::ParsedExpr>) {
+        (self.env, self.tc_state, self.env_bindings, self.infix_ops, self.notations)
     }
 }
 
 /// Parse an expression for tactic use (standalone to avoid borrow conflicts)
-fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, infix_ops: &HashMap<String, (i32, String, bool)>, notations: &HashMap<String, super::repl_parser::ParsedExpr>, input: &str) -> Result<Expr, String> {
+pub fn parse_tactic_expr(env_bindings: &HashMap<String, Expr>, env: &Environment, infix_ops: &HashMap<String, (i32, String, bool)>, notations: &HashMap<String, super::repl_parser::ParsedExpr>, input: &str) -> Result<Expr, String> {
     let mut parser = ReplParser::new_with_state(input, infix_ops.clone(), notations.clone());
     let parsed = parser.parse_expr().map_err(|e| format!("parse error: {}", e))?;
     Ok(parsed.to_expr(env_bindings, env, &mut Vec::new()))
@@ -1695,7 +1695,7 @@ fn parse_rewrite_list(input: &str) -> Result<Vec<(bool, String)>, String> {
 }
 
 /// Execute a single tactic command (standalone to avoid borrow conflicts)
-fn execute_tactic(
+pub fn execute_tactic(
     env: &Environment,
     env_bindings: &HashMap<String, Expr>,
     infix_ops: &HashMap<String, (i32, String, bool)>,

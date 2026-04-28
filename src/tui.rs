@@ -4,11 +4,13 @@ use crossterm::cursor::{MoveTo, Show, Hide};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use std::collections::HashMap;
 use std::io::{self, stdout};
+use std::rc::Rc;
 
 use super::environment::Environment;
 use super::expr::*;
 use super::repl::Repl;
-use super::repl_parser::Parser as ReplParser;
+use super::repl_parser::{ParsedDecl, ParsedExpr, Parser as ReplParser};
+use super::tactic::TacticEngine;
 use super::type_checker::{TypeChecker, TypeCheckerState};
 
 /// Terminal UI for browsing a Lean file and inspecting goals/types at each line.
@@ -16,6 +18,8 @@ pub struct TuiApp {
     env: Environment,
     tc_state: TypeCheckerState,
     env_bindings: HashMap<String, Expr>,
+    infix_ops: HashMap<String, (i32, String, bool)>,
+    notations: HashMap<String, ParsedExpr>,
     file_lines: Vec<String>,
     selected: usize,
     scroll: usize,
@@ -28,11 +32,13 @@ pub struct TuiApp {
 impl TuiApp {
     /// Create a TUI app by loading dependencies via Repl, then taking its state.
     pub fn new(repl: Repl, file_lines: Vec<String>) -> Self {
-        let (env, tc_state, env_bindings) = repl.into_state();
+        let (env, tc_state, env_bindings, infix_ops, notations) = repl.into_state();
         let mut app = TuiApp {
             env,
             tc_state,
             env_bindings,
+            infix_ops,
+            notations,
             file_lines,
             selected: 0,
             scroll: 0,
@@ -175,8 +181,14 @@ impl TuiApp {
         } else if trimmed.starts_with("--") {
             self.info_lines.push("⊢ Comment".to_string());
         } else {
-            // Try declaration signature first (InfoView style: hypotheses + goal)
-            if let Some((sig, premises, goal)) = self.try_decl_type(&trimmed) {
+            // Try tactic goals first (if inside a by block)
+            if let Some(goal_lines) = self.try_tactic_goals(self.selected) {
+                for gl in &goal_lines {
+                    for wrapped in self.wrap_text(gl, self.info_width() as usize) {
+                        self.info_lines.push(wrapped);
+                    }
+                }
+            } else if let Some((sig, premises, goal)) = self.try_decl_type(&trimmed) {
                 // Hypotheses (Pi binders)
                 let has_premises = !premises.is_empty();
                 for p in &premises {
@@ -203,6 +215,181 @@ impl TuiApp {
                 }
             }
         }
+    }
+
+    fn try_tactic_goals(&mut self, line_idx: usize) -> Option<Vec<String>> {
+        // 1. Find enclosing declaration
+        let decl_start = self.find_decl_start(line_idx)?;
+
+        // 2. Collect declaration text
+        let decl_end = self.find_decl_end(decl_start);
+        let decl_text: String = self.file_lines[decl_start..=decl_end].join("\n");
+
+        // 3. Parse the declaration
+        let mut parser = ReplParser::new_with_state(&decl_text, self.infix_ops.clone(), self.notations.clone());
+        let decl = parser.parse_decl().ok()?;
+
+        // 4. Extract info
+        let (params, ret_ty, value) = match decl {
+            ParsedDecl::Theorem { params, ret_ty, value, .. } => (params, Some(ret_ty), value),
+            ParsedDecl::Def { params, ret_ty, value, .. } => (params, ret_ty, value),
+            ParsedDecl::Solve { params, ret_ty, value, .. } => (params, Some(ret_ty), value),
+            _ => return None,
+        };
+
+        // 5. Must be a tactic block
+        match &value {
+            ParsedExpr::TacticBlock(_) => {}
+            _ => return None,
+        }
+
+        // 6. Find the 'by' position within the declaration
+        let (by_line, by_offset) = self.find_by_offset(decl_start, decl_end)?;
+
+        // 7. Build partial tactic text from 'by' to current line
+        let mut partial_text = String::new();
+        for i in by_line..=line_idx {
+            if i == by_line {
+                partial_text.push_str(&self.file_lines[i][by_offset..]);
+            } else {
+                partial_text.push('\n');
+                partial_text.push_str(&self.file_lines[i]);
+            }
+        }
+
+        // 8. Parse partial tactics (empty if just 'by')
+        let partial_tactics = if partial_text.trim() == "by" {
+            Vec::new()
+        } else {
+            let mut partial_parser = ReplParser::new_with_state(&partial_text, self.infix_ops.clone(), self.notations.clone());
+            match partial_parser.parse_expr().ok()? {
+                ParsedExpr::TacticBlock(t) => t,
+                _ => return None,
+            }
+        };
+
+        // 9. Build parameter expressions
+        let mut bound_vars: Vec<String> = Vec::new();
+        let mut param_exprs: Vec<(String, Expr)> = Vec::new();
+
+        for (pname, pty) in &params {
+            let ty_expr = pty.to_expr(&self.env_bindings, &self.env, &mut bound_vars);
+            param_exprs.push((pname.clone(), ty_expr));
+            bound_vars.push(pname.clone());
+        }
+
+        // 10. Build target type
+        let mut target_expr = if let Some(rt) = ret_ty {
+            rt.to_expr(&self.env_bindings, &self.env, &mut bound_vars)
+        } else {
+            return None;
+        };
+        for (pname, pty) in param_exprs.iter().rev() {
+            target_expr = Expr::Pi(Name::new(pname), BinderInfo::Default, Rc::new(pty.clone()), Rc::new(target_expr));
+        }
+
+        // 11. Create and run tactic engine
+        let mut tc_state = self.tc_state.clone();
+        let mut engine = TacticEngine::new(&mut tc_state, &self.env, &self.env_bindings, target_expr);
+        engine.num_params = param_exprs.len();
+
+        for cmd in &partial_tactics {
+            if let Err(e) = super::repl::execute_tactic(
+                &self.env, &self.env_bindings, &self.infix_ops, &self.notations, &mut engine, cmd
+            ) {
+                return Some(vec![format!("Tactic error: {}", e)]);
+            }
+        }
+
+        // 12. Format goals
+        Some(self.format_goals(&engine))
+    }
+
+    fn find_decl_start(&self, line_idx: usize) -> Option<usize> {
+        for i in (0..=line_idx).rev() {
+            let trimmed = self.file_lines[i].trim();
+            if trimmed.starts_with("theorem ") || trimmed.starts_with("def ") || trimmed.starts_with("solve ") {
+                return Some(i);
+            }
+            // Stop if we hit another top-level construct
+            if trimmed.starts_with("inductive ") || trimmed.starts_with("axiom ") || trimmed.starts_with("structure ")
+                || trimmed.starts_with("import ") || trimmed.starts_with("namespace ") || trimmed.starts_with("mutual ") {
+                break;
+            }
+        }
+        None
+    }
+
+    fn find_decl_end(&self, start: usize) -> usize {
+        for i in (start + 1)..self.file_lines.len() {
+            let trimmed = self.file_lines[i].trim();
+            // Inductive constructor lines don't end the declaration
+            if trimmed.starts_with("|") {
+                continue;
+            }
+            if trimmed.starts_with("theorem ") || trimmed.starts_with("def ") || trimmed.starts_with("solve ")
+                || trimmed.starts_with("inductive ") || trimmed.starts_with("axiom ") || trimmed.starts_with("structure ")
+                || trimmed.starts_with("import ") || trimmed.starts_with("namespace ") || trimmed.starts_with("end ")
+                || trimmed.starts_with("mutual ") || trimmed.starts_with("variable ") || trimmed.starts_with("notation ")
+                || trimmed.starts_with("infix ") || trimmed.starts_with("infixl ") || trimmed.starts_with("section ") {
+                return i - 1;
+            }
+        }
+        self.file_lines.len() - 1
+    }
+
+    fn find_by_offset(&self, decl_start: usize, decl_end: usize) -> Option<(usize, usize)> {
+        for i in decl_start..=decl_end {
+            let line = &self.file_lines[i];
+            if let Some(pos) = line.find(":= by") {
+                return Some((i, pos + 3)); // position of 'b' in 'by'
+            }
+            if let Some(pos) = line.find("by") {
+                let after = &line[pos..];
+                if after.starts_with("by") {
+                    // Make sure it's the keyword 'by', not part of 'abyss' etc.
+                    let before = &line[..pos];
+                    if before.trim().is_empty() || before.trim_end().ends_with(":=") {
+                        return Some((i, pos));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn format_goals(&self, engine: &TacticEngine) -> Vec<String> {
+        let mut lines = Vec::new();
+        if engine.num_goals() == 0 {
+            lines.push("No goals".to_string());
+            return lines;
+        }
+
+        for (i, goal) in engine.goals.iter().enumerate() {
+            if i > 0 {
+                lines.push("".to_string());
+            }
+            // Local context (in order)
+            for decl in goal.lctx.iter_decls() {
+                let name = decl.get_user_name().to_string();
+                let ty = format_expr(decl.get_type());
+                let prefix = if decl.get_value().is_some() {
+                    format!("let {} : {} := ...", name, ty)
+                } else {
+                    format!("{} : {}", name, ty)
+                };
+                for wrapped in self.wrap_text(&prefix, self.info_width() as usize) {
+                    lines.push(wrapped);
+                }
+            }
+            if !goal.lctx.empty() {
+                let sep = "─".repeat(self.info_width() as usize);
+                lines.push(sep);
+            }
+            let target = format_expr(&goal.target);
+            lines.push(format!("⊢ {}", target));
+        }
+        lines
     }
 
     fn try_decl_type(&mut self, line: &str) -> Option<(String, Vec<String>, String)> {
@@ -382,47 +569,384 @@ impl TuiApp {
 fn extract_premises(e: &Expr) -> (Vec<String>, String) {
     let mut premises = Vec::new();
     let mut current = e;
+    let mut binders: Vec<String> = Vec::new();
     while let Expr::Pi(name, _, dom, body) = current {
-        premises.push(format!("{} : {}", name.to_string(), format_expr(dom)));
+        let display_name = if name.to_string() == "_" {
+            format!("_{}", binders.len())
+        } else {
+            name.to_string()
+        };
+        premises.push(format!("{} : {}", display_name, format_expr_with_binders(dom, 0, &binders)));
+        binders.push(display_name);
         current = body;
     }
-    (premises, format_expr(current))
+    (premises, format_expr_with_binders(current, 0, &binders))
 }
 
-/// Format an Expr for display (simplified).
+/// Format an Expr for human-readable display.
 fn format_expr(e: &Expr) -> String {
+    format_expr_with_binders(e, 0, &[])
+}
+
+/// Precedence levels for parentheses.
+const PREC_ARROW: u8 = 1;
+const PREC_EQ: u8 = 2;
+const PREC_AND: u8 = 3;
+const PREC_OR: u8 = 4;
+const PREC_NOT: u8 = 5;
+const PREC_ADD: u8 = 6;
+const PREC_MUL: u8 = 7;
+const PREC_APP: u8 = 8;
+
+/// Strip generated suffix like ".0" from FVar names.
+fn pretty_fvar_name(name: &Name) -> String {
+    let s = name.to_string();
+    if let Some(dot_pos) = s.rfind('.') {
+        if s[dot_pos + 1..].chars().all(|c| c.is_ascii_digit()) {
+            return s[..dot_pos].to_string();
+        }
+    }
+    s
+}
+
+/// Format an Expr with a stack of binder names for BVar resolution.
+fn format_expr_with_binders(e: &Expr, prec: u8, binders: &[String]) -> String {
+    if let Some((s, op_prec)) = try_format_special(e, binders) {
+        return if prec > op_prec {
+            format!("({})", s)
+        } else {
+            s
+        };
+    }
+
     match e {
-        Expr::BVar(n) => format!("x{}", n),
-        Expr::Const(name, _) => name.to_string(),
+        Expr::BVar(n) => {
+            let idx = *n as usize;
+            if idx < binders.len() {
+                binders[binders.len() - 1 - idx].clone()
+            } else {
+                format!("x{}", n)
+            }
+        }
+        Expr::FVar(name) => pretty_fvar_name(name),
+        Expr::Const(name, _) => {
+            let s = name.to_string();
+            match s.as_str() {
+                "Nat.zero" => "0".to_string(),
+                _ => s,
+            }
+        }
         Expr::App(_, _) => {
             let (head, args) = e.get_app_args();
             let head_str = if let Some(h) = head {
                 match h {
                     Expr::Const(n, _) => n.to_string(),
-                    _ => format_expr(h),
+                    _ => format_expr_with_binders(h, PREC_APP + 1, binders),
                 }
             } else {
                 "?".to_string()
             };
-            let args_str: Vec<String> = args.iter().map(|a| format_expr(*a)).collect();
+            let args_str: Vec<String> = args.iter().map(|a| format_expr_with_binders(a, PREC_APP + 1, binders)).collect();
             if args_str.is_empty() {
                 head_str
             } else {
-                format!("{}({})", head_str, args_str.join(", "))
+                let s = format!("{} {}", head_str, args_str.join(" "));
+                if prec > PREC_APP {
+                    format!("({})", s)
+                } else {
+                    s
+                }
             }
         }
-        Expr::Lambda(_, _, ty, body) => {
-            format!("λ(_ : {}). {}", format_expr(ty), format_expr(body))
+        Expr::Lambda(name, _, ty, body) => {
+            let mut new_binders = binders.to_vec();
+            let display_name = if name.to_string() == "_" {
+                format!("_{}", binders.len())
+            } else {
+                name.to_string()
+            };
+            new_binders.push(display_name.clone());
+            let s = format!(
+                "fun {} : {} => {}",
+                display_name,
+                format_expr_with_binders(ty, 0, binders),
+                format_expr_with_binders(body, 0, &new_binders)
+            );
+            if prec > 0 { format!("({})", s) } else { s }
         }
-        Expr::Pi(_, _, ty, body) => {
-            format!("Π(_ : {}). {}", format_expr(ty), format_expr(body))
+        Expr::Pi(name, _, ty, body) => {
+            let is_prop = is_prop_type(body);
+            let mut new_binders = binders.to_vec();
+            let display_name = if name.to_string() == "_" {
+                format!("_{}", binders.len())
+            } else {
+                name.to_string()
+            };
+            new_binders.push(display_name.clone());
+            let s = if is_prop && name.to_string() != "_" {
+                format!(
+                    "forall ({} : {}), {}",
+                    display_name,
+                    format_expr_with_binders(ty, 0, binders),
+                    format_expr_with_binders(body, 0, &new_binders)
+                )
+            } else if name.to_string() == "_" {
+                format!(
+                    "{} -> {}",
+                    format_expr_with_binders(ty, PREC_ARROW, binders),
+                    format_expr_with_binders(body, PREC_ARROW, &new_binders)
+                )
+            } else {
+                format!(
+                    "({} : {}) -> {}",
+                    display_name,
+                    format_expr_with_binders(ty, 0, binders),
+                    format_expr_with_binders(body, 0, &new_binders)
+                )
+            };
+            if prec > PREC_ARROW { format!("({})", s) } else { s }
         }
-        Expr::Let(_, ty, val, body, _) => {
-            format!("let _ : {} := {} in {}", format_expr(ty), format_expr(val), format_expr(body))
+        Expr::Let(name, ty, val, body, _) => {
+            let s = format!(
+                "let {} : {} := {} in {}",
+                name.to_string(),
+                format_expr_with_binders(ty, 0, binders),
+                format_expr_with_binders(val, 0, binders),
+                format_expr_with_binders(body, 0, binders)
+            );
+            if prec > 0 { format!("({})", s) } else { s }
         }
-        Expr::Sort(l) => format!("Sort({:?})", l),
+        Expr::Sort(l) => format_sort(l),
         Expr::MVar(name) => format!("?{}", name.to_string()),
-        Expr::Proj(name, idx, e) => format!("proj({}, {}, {})", name.to_string(), idx, format_expr(e)),
+        Expr::Proj(name, idx, e) => format!("{}.{}{})", format_expr_with_binders(e, 0, binders), idx, name.to_string()),
+        Expr::Lit(l) => format!("{:?}", l),
         _ => format!("{:?}", e),
+    }
+}
+
+/// Try to format common patterns as infix operators.
+/// Returns (formatted_string, precedence).
+fn try_format_special(e: &Expr, binders: &[String]) -> Option<(String, u8)> {
+    let (head, args) = e.get_app_args();
+    let head = head?;
+
+    if let Expr::Const(name, _) = head {
+        let n = name.to_string();
+        match n.as_str() {
+            "Eq" if args.len() >= 2 => {
+                let a = format_expr_with_binders(args[args.len() - 2], PREC_EQ + 1, binders);
+                let b = format_expr_with_binders(args[args.len() - 1], PREC_EQ + 1, binders);
+                Some((format!("{} = {}", a, b), PREC_EQ))
+            }
+            "And" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_AND + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_AND + 1, binders);
+                Some((format!("{} /\\ {}", a, b), PREC_AND))
+            }
+            "Or" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_OR + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_OR + 1, binders);
+                Some((format!("{} \\/ {}", a, b), PREC_OR))
+            }
+            "Not" if args.len() == 1 => {
+                let a = format_expr_with_binders(args[0], PREC_NOT + 1, binders);
+                Some((format!("~{}", a), PREC_NOT))
+            }
+            "le" | "nat_le" | "Nat.le" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_EQ + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_EQ + 1, binders);
+                Some((format!("{} <= {}", a, b), PREC_EQ))
+            }
+            "lt" | "nat_lt" | "Nat.lt" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_EQ + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_EQ + 1, binders);
+                Some((format!("{} < {}", a, b), PREC_EQ))
+            }
+            "ge" | "nat_ge" | "Nat.ge" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_EQ + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_EQ + 1, binders);
+                Some((format!("{} >= {}", a, b), PREC_EQ))
+            }
+            "gt" | "nat_gt" | "Nat.gt" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_EQ + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_EQ + 1, binders);
+                Some((format!("{} > {}", a, b), PREC_EQ))
+            }
+            "add" | "nat_add" | "Nat.add" | "int_add" | "Int.add" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_ADD + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_ADD + 1, binders);
+                Some((format!("{} + {}", a, b), PREC_ADD))
+            }
+            "mul" | "nat_mul" | "Nat.mul" | "int_mul" | "Int.mul" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_MUL + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_MUL + 1, binders);
+                Some((format!("{} * {}", a, b), PREC_MUL))
+            }
+            "sub" | "nat_sub" | "Nat.sub" | "int_sub" | "Int.sub" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_ADD + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_ADD + 1, binders);
+                Some((format!("{} - {}", a, b), PREC_ADD))
+            }
+            "div" | "nat_div" | "Nat.div" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_MUL + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_MUL + 1, binders);
+                Some((format!("{} / {}", a, b), PREC_MUL))
+            }
+            "mod" | "nat_mod" | "Nat.mod" if args.len() == 2 => {
+                let a = format_expr_with_binders(args[0], PREC_MUL + 1, binders);
+                let b = format_expr_with_binders(args[1], PREC_MUL + 1, binders);
+                Some((format!("{} % {}", a, b), PREC_MUL))
+            }
+            "Nat.succ" if args.len() == 1 => {
+                let a = format_expr_with_binders(args[0], PREC_APP + 1, binders);
+                Some((format!("succ {}", a), PREC_APP))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+fn format_sort(l: &Level) -> String {
+    match l {
+        Level::Zero => "Prop".to_string(),
+        Level::Succ(inner) => {
+            if **inner == Level::Zero {
+                "Type".to_string()
+            } else {
+                format!("Type_{}", level_to_num(l))
+            }
+        }
+        _ => format!("Sort({})", format_level(l)),
+    }
+}
+
+fn format_level(l: &Level) -> String {
+    match l {
+        Level::Zero => "0".to_string(),
+        Level::Succ(inner) => format!("{}+1", format_level(inner)),
+        Level::Max(a, b) => format!("max({}, {})", format_level(a), format_level(b)),
+        Level::IMax(a, b) => format!("imax({}, {})", format_level(a), format_level(b)),
+        Level::Param(n) => n.to_string(),
+        Level::MVar(n) => format!("?{}", n.to_string()),
+    }
+}
+
+fn level_to_num(l: &Level) -> u32 {
+    match l {
+        Level::Zero => 0,
+        Level::Succ(inner) => level_to_num(inner) + 1,
+        _ => 0,
+    }
+}
+
+fn is_prop_type(e: &Expr) -> bool {
+    match e {
+        Expr::Sort(l) => *l == Level::Zero,
+        Expr::Pi(_, _, _, body) => is_prop_type(body),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn setup_app(filepath: &str, deps: &[&str]) -> TuiApp {
+        let content = fs::read_to_string(filepath).unwrap();
+        let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let mut repl = crate::repl::Repl::new();
+        repl.set_quiet(true);
+        for dep in deps {
+            repl.check_files(&[*dep]).unwrap();
+        }
+        repl.check_files(&[filepath]).unwrap();
+        TuiApp::new(repl, lines)
+    }
+
+    #[test]
+    fn test_tactic_goals_in_proof_cic() {
+        let mut app = setup_app(
+            "lib/Proof.cic",
+            &["lib/Nat.cic", "lib/Decimal.cic", "lib/Int.cic", "lib/logic.cic", "lib/Exists.cic", "lib/Eq.cic"],
+        );
+
+        // Line 4: theorem const_nat : forall (n : Nat), Nat -> Nat := by
+        app.selected = 3;
+        app.update_info();
+        println!("Line 4 (theorem start): {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty(), "Should show goals at theorem start");
+
+        // Line 5: intro n m
+        app.selected = 4;
+        app.update_info();
+        println!("Line 5 (after intro): {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty(), "Should show goals after intro");
+
+        // Line 6: exact n
+        app.selected = 5;
+        app.update_info();
+        println!("Line 6 (after exact): {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty(), "Should show goals after exact");
+    }
+
+    #[test]
+    fn test_tactic_goals_in_natproof_cic() {
+        let mut app = setup_app(
+            "lib/NatProof.cic",
+            &["lib/Nat.cic", "lib/Decimal.cic", "lib/Int.cic", "lib/logic.cic", "lib/Exists.cic", "lib/Eq.cic"],
+        );
+
+        // Find the le_refl theorem line
+        let le_refl_line = app.file_lines.iter().position(|l| l.contains("theorem le_refl")).unwrap();
+        println!("le_refl at line {}", le_refl_line + 1);
+
+        // Theorem line
+        app.selected = le_refl_line;
+        app.update_info();
+        println!("le_refl theorem line: {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty());
+
+        // After intro n
+        app.selected = le_refl_line + 1;
+        app.update_info();
+        println!("le_refl after intro: {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty());
+
+        // After induction n
+        app.selected = le_refl_line + 2;
+        app.update_info();
+        println!("le_refl after induction: {:?}", app.info_lines);
+        assert!(!app.info_lines.is_empty());
+    }
+
+    #[test]
+    fn test_format_expr_readability() {
+        // Eq Nat zero zero -> 0 = 0
+        let eq_expr = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_app(
+                    Expr::mk_const(Name::new("Eq"), vec![]),
+                    Expr::mk_const(Name::new("Nat"), vec![]),
+                ),
+                Expr::mk_const(Name::new("Nat").extend("zero"), vec![]),
+            ),
+            Expr::mk_const(Name::new("Nat").extend("zero"), vec![]),
+        );
+        let s = format_expr(&eq_expr);
+        println!("Formatted Eq: {}", s);
+        assert_eq!(s, "0 = 0");
+
+        // And P Q -> P /\ Q
+        let and_expr = Expr::mk_app(
+            Expr::mk_app(
+                Expr::mk_const(Name::new("And"), vec![]),
+                Expr::mk_const(Name::new("P"), vec![]),
+            ),
+            Expr::mk_const(Name::new("Q"), vec![]),
+        );
+        assert_eq!(format_expr(&and_expr), "P /\\ Q");
     }
 }

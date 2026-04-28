@@ -44,6 +44,24 @@ impl Environment {
         ctors.get(idx).cloned()
     }
 
+    /// Resolve a bare constant name to its fully-qualified Name.
+    /// Searches all constants (definitions, theorems, constructors, axioms).
+    /// Returns the name if exactly one match is found.
+    pub fn resolve_constant_name(&self, bare: &str) -> Option<Name> {
+        let mut candidates = Vec::new();
+        for (_, info) in self.constants.iter() {
+            let name = info.name();
+            if name.last() == bare {
+                candidates.push(name.clone());
+            }
+        }
+        if candidates.len() == 1 {
+            Some(candidates[0].clone())
+        } else {
+            None
+        }
+    }
+
     /// Get a constructor name by its bare name, searching all constructors.
     /// Returns the fully-qualified name if exactly one match is found.
     pub fn resolve_ctor_name(&self, bare: &str) -> Option<Name> {

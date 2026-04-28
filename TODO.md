@@ -7,6 +7,7 @@
 - **Reduce hardcoding in Rust**: Constructor names like `Eq.refl`, `Nat.zero`, `Nat.succ` are hardcoded in tactic.rs and repl_parser.rs. Consider a registry-driven approach where the kernel exposes constructor metadata so the parser/tactic engine doesn't need string constants.
   - **Status**: `Eq.refl` in `tactic.rs` already uses `env.get_constructor`. Numeric literals in `repl_parser.rs` now use `ParsedExpr::NatLit(n)` with deferred expansion in `to_expr` via `env.get_constructor`, eliminating `NAT_ZERO_CTOR`/`NAT_SUCC_CTOR` constants.
 - **Clean up `to_expr` namespace resolution**: The bare-name-to-namespaced fallback in `repl_parser.rs` works but could be more principled with a dedicated name-resolution pass.
+  - **Status**: Extracted a standalone `resolve_name` function in `repl_parser.rs` that performs resolution in a clear priority order: (1) bound variables, (2) env_bindings exact match, (3) constructor registry (`resolve_ctor_name`), (4) general constant registry (`resolve_constant_name`), (5) exact hierarchical lookup in environment, (6) fallback to unverified Const. Also added `Environment::resolve_constant_name` to generalize bare-name resolution beyond constructors. The `to_expr` Const branch is now a single call to `resolve_name`.
 
 ## Known Issues
 

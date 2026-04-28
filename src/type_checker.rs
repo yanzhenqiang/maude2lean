@@ -699,7 +699,6 @@ impl<'a> TypeChecker<'a> {
         if t == s {
             return true;
         }
-
         // Check failure cache
         let pair = ExprPair(t.clone(), s.clone());
         if self.st.failure_cache.contains_key(&pair) {

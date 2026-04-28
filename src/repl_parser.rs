@@ -42,38 +42,77 @@ pub enum ParsedExpr {
     Calc(Box<ParsedExpr>, Vec<(ParsedExpr, ParsedExpr, ParsedExpr)>),
 }
 
+/// Dedicated name-resolution pass.
+/// Resolves a raw identifier into an Expr by checking, in order:
+/// 1. Bound variables (local lambda/pi binders)
+/// 2. Environment bindings (user-defined aliases from env_bindings)
+/// 3. Constructor names (bare ctor -> Type.ctor, constructors only)
+/// 4. General constant names (bare name -> unique constant match)
+/// 5. Exact hierarchical constant name in the environment
+/// 6. Fallback: construct a hierarchical Const without verification
+fn resolve_name(
+    name: &str,
+    env_bindings: &HashMap<String, Expr>,
+    env: &Environment,
+    bound_vars: &[String],
+) -> Expr {
+    // 1. Bound variables (de Bruijn index = distance from right/end)
+    for (i, bv) in bound_vars.iter().enumerate().rev() {
+        if bv == name {
+            return Expr::mk_bvar((bound_vars.len() - 1 - i) as u64);
+        }
+    }
+
+    // 2. Environment bindings (exact match)
+    if let Some(e) = env_bindings.get(name) {
+        return e.clone();
+    }
+
+    // 3. Constructor namespace resolution (bare ctor -> Type.ctor)
+    if let Some(resolved) = env.resolve_ctor_name(name) {
+        return Expr::mk_const(resolved, vec![]);
+    }
+
+    // 4. General constant resolution (any kind of constant)
+    if !name.contains('.') {
+        if let Some(resolved) = env.resolve_constant_name(name) {
+            return Expr::mk_const(resolved, vec![]);
+        }
+    }
+
+    // 5. Exact hierarchical constant name
+    let name_parts: Vec<&str> = name.split('.').collect();
+    let lean_name = if name_parts.len() == 1 {
+        Name::new(name_parts[0])
+    } else {
+        let mut n = Name::new(name_parts[0]);
+        for part in &name_parts[1..] {
+            n = n.extend(part);
+        }
+        n
+    };
+
+    if env.find(&lean_name).is_some() {
+        return Expr::mk_const(lean_name, vec![]);
+    }
+
+    // 6. Fallback
+    Expr::mk_const(lean_name, vec![])
+}
+
 impl ParsedExpr {
     /// Convert parsed expression to Expr, resolving names via environment.
     /// `env_bindings` maps user-facing names to Expr constants.
     /// `env` is the kernel Environment for looking up constructors/recursors.
     /// `bound_vars` maps local bound variable names to de Bruijn indices.
     pub fn to_expr(&self, env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>) -> Expr {
+        self.to_expr_with_fn(env_bindings, env, bound_vars, None)
+    }
+
+    pub fn to_expr_with_fn(&self, env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>, recursive_fn: Option<&str>) -> Expr {
         match self {
             ParsedExpr::BVar(n) => Expr::mk_bvar(*n),
-            ParsedExpr::Const(name) => {
-                // Check bound variables first (de Bruijn index = distance from right/end)
-                for (i, bv) in bound_vars.iter().enumerate().rev() {
-                    if bv == name {
-                        return Expr::mk_bvar((bound_vars.len() - 1 - i) as u64);
-                    }
-                }
-                // Check environment constants (exact match)
-                if let Some(e) = env_bindings.get(name) {
-                    return e.clone();
-                }
-                // Registry-driven namespace resolution: bare constructor names
-                // are resolved to Type.ctor by querying the environment.
-                if let Some(resolved) = env.resolve_ctor_name(name) {
-                    return Expr::mk_const(resolved, vec![]);
-                }
-                // Fallback: parse as hierarchical name
-                let name_parts: Vec<&str> = name.split('.').collect();
-                let mut lean_name = Name::new(name_parts[0]);
-                for part in &name_parts[1..] {
-                    lean_name = lean_name.extend(part);
-                }
-                Expr::mk_const(lean_name, vec![])
-            }
+            ParsedExpr::Const(name) => resolve_name(name, env_bindings, env, bound_vars),
             ParsedExpr::NatLit(n) => {
                 // Resolve Nat constructors from the environment registry.
                 let zero_name = env.get_constructor(&Name::new("Nat"), 0)
@@ -87,29 +126,29 @@ impl ParsedExpr {
                 result
             }
             ParsedExpr::App(f, a) => {
-                let f_expr = f.to_expr(env_bindings, env, bound_vars);
-                let a_expr = a.to_expr(env_bindings, env, bound_vars);
+                let f_expr = f.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
+                let a_expr = a.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 Expr::mk_app(f_expr, a_expr)
             }
             ParsedExpr::Lambda(name, ty, body) => {
-                let ty_expr = ty.to_expr(env_bindings, env, bound_vars);
+                let ty_expr = ty.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.push(name.clone());
-                let body_expr = body.to_expr(env_bindings, env, bound_vars);
+                let body_expr = body.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.pop();
                 Expr::Lambda(Name::new(name), BinderInfo::Default, Rc::new(ty_expr), Rc::new(body_expr))
             }
             ParsedExpr::Pi(name, ty, body) => {
-                let ty_expr = ty.to_expr(env_bindings, env, bound_vars);
+                let ty_expr = ty.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.push(name.clone());
-                let body_expr = body.to_expr(env_bindings, env, bound_vars);
+                let body_expr = body.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.pop();
                 Expr::Pi(Name::new(name), BinderInfo::Default, Rc::new(ty_expr), Rc::new(body_expr))
             }
             ParsedExpr::Let(name, ty, val, body) => {
-                let ty_expr = ty.to_expr(env_bindings, env, bound_vars);
-                let val_expr = val.to_expr(env_bindings, env, bound_vars);
+                let ty_expr = ty.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
+                let val_expr = val.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.push(name.clone());
-                let body_expr = body.to_expr(env_bindings, env, bound_vars);
+                let body_expr = body.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 bound_vars.pop();
                 Expr::Let(Name::new(name), Rc::new(ty_expr), Rc::new(val_expr), Rc::new(body_expr), false)
             }
@@ -121,7 +160,7 @@ impl ParsedExpr {
                 }
             }
             ParsedExpr::Match(scrutinee, motive, branches) => {
-                self.desugar_match(scrutinee, motive, branches, env_bindings, env, bound_vars)
+                self.desugar_match(scrutinee, motive, branches, env_bindings, env, bound_vars, recursive_fn)
             }
             ParsedExpr::TacticBlock(_) => {
                 panic!("TacticBlock should be handled by the REPL, not converted directly to Expr")
@@ -131,13 +170,13 @@ impl ParsedExpr {
                 if steps.is_empty() {
                     panic!("calc block must have at least one step");
                 }
-                let ty_expr = ty.to_expr(env_bindings, env, bound_vars);
+                let ty_expr = ty.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 let first_lhs_parsed = &steps[0].0;
-                let mut result = steps[0].2.to_expr(env_bindings, env, bound_vars);
+                let mut result = steps[0].2.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                 for i in 1..steps.len() {
-                    let prev_rhs = steps[i - 1].1.to_expr(env_bindings, env, bound_vars);
-                    let curr_rhs = steps[i].1.to_expr(env_bindings, env, bound_vars);
-                    let proof = steps[i].2.to_expr(env_bindings, env, bound_vars);
+                    let prev_rhs = steps[i - 1].1.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
+                    let curr_rhs = steps[i].1.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
+                    let proof = steps[i].2.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                     // Build P = \y : ty . Eq ty first_lhs y
                     let p_body = ParsedExpr::App(
                         Box::new(ParsedExpr::App(
@@ -150,7 +189,7 @@ impl ParsedExpr {
                         Box::new(ParsedExpr::Const("y".to_string())),
                     );
                     bound_vars.push("y".to_string());
-                    let p_expr = p_body.to_expr(env_bindings, env, bound_vars);
+                    let p_expr = p_body.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
                     bound_vars.pop();
                     let p_lambda = Expr::Lambda(Name::new("y"), BinderInfo::Default, Rc::new(ty_expr.clone()), Rc::new(p_expr));
                     // eq_subst ty prev_rhs curr_rhs P proof result
@@ -186,7 +225,7 @@ impl ParsedExpr {
         env.resolve_ctor_name(bare)
     }
 
-    fn desugar_match(&self, scrutinee: &ParsedExpr, motive: &ParsedExpr, branches: &[(ParsedExpr, ParsedExpr)], env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>) -> Expr {
+    fn desugar_match(&self, scrutinee: &ParsedExpr, motive: &ParsedExpr, branches: &[(ParsedExpr, ParsedExpr)], env_bindings: &HashMap<String, Expr>, env: &Environment, bound_vars: &mut Vec<String>, recursive_fn: Option<&str>) -> Expr {
         // Extract constructor info from first pattern
         let (first_ctor_name, _) = extract_ctor_and_vars(&branches[0].0);
         let mut ctor_name_obj = Name::new(&first_ctor_name);
@@ -232,7 +271,7 @@ impl ParsedExpr {
 
         // Build motive lambda: λ (_m : induct_ty) . motive_expr
         let induct_ty_expr = Expr::mk_const(induct_name.clone(), vec![]);
-        let motive_expr = motive.to_expr(env_bindings, env, bound_vars);
+        let motive_expr = motive.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
         let motive_lambda = Expr::Lambda(
             Name::new("_m"), BinderInfo::Default,
             Rc::new(induct_ty_expr),
@@ -259,12 +298,24 @@ impl ParsedExpr {
 
             let (_, vars) = extract_ctor_and_vars(&branch.0);
             let param_types = get_ctor_param_types(env, ctor_name);
+            let k = vars.len();
+            let r = param_types.iter().filter(|pt| expr_contains_const(pt, &induct_name)).count();
+
+            // Compute mapping from recursive param index to (pattern_bvar, ih_bvar) in final minor body
+            let mut recursive_pairs = Vec::new();
+            for p in 0..k {
+                if expr_contains_const(&param_types[p], &induct_name) {
+                    let pattern_bvar = (r + k - 1 - p) as u64;
+                    let ih_bvar = param_types[p+1..].iter().filter(|pt| expr_contains_const(pt, &induct_name)).count() as u64;
+                    recursive_pairs.push((pattern_bvar, ih_bvar));
+                }
+            }
 
             // Bind pattern variables
             for var in &vars {
                 bound_vars.push(var.clone());
             }
-            let body_expr = branch.1.to_expr(env_bindings, env, bound_vars);
+            let body_expr = branch.1.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
             for _ in &vars {
                 bound_vars.pop();
             }
@@ -292,6 +343,13 @@ impl ParsedExpr {
                 minor = Expr::Lambda(Name::new(var), BinderInfo::Default, Rc::new(ty), Rc::new(minor));
             }
 
+            // Replace recursive calls with ih variables in the minor premise body
+            if let Some(fn_name) = recursive_fn {
+                if !recursive_pairs.is_empty() {
+                    minor = replace_recursive_calls(&minor, fn_name, &recursive_pairs);
+                }
+            }
+
             minors.push(minor);
         }
 
@@ -301,7 +359,7 @@ impl ParsedExpr {
         for minor in minors {
             app = Expr::mk_app(app, minor);
         }
-        let scrut_expr = scrutinee.to_expr(env_bindings, env, bound_vars);
+        let scrut_expr = scrutinee.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
         Expr::mk_app(app, scrut_expr)
     }
 }
@@ -347,6 +405,92 @@ fn expr_contains_const(e: &Expr, name: &Name) -> bool {
         Expr::Proj(_, _, e) => expr_contains_const(e, name),
         Expr::MData(_, e) => expr_contains_const(e, name),
         _ => false,
+    }
+}
+
+/// Flatten an application chain into (head, args).
+fn flatten_app<'a>(expr: &'a Expr) -> (&'a Expr, Vec<&'a Expr>) {
+    let mut args = Vec::new();
+    let mut head = expr;
+    while let Expr::App(f, a) = head {
+        args.push(a.as_ref());
+        head = f.as_ref();
+    }
+    args.reverse();
+    (head, args)
+}
+
+/// Rebuild an application chain from head and args.
+fn rebuild_app(head: Expr, args: Vec<Expr>) -> Expr {
+    let mut result = head;
+    for arg in args {
+        result = Expr::mk_app(result, arg);
+    }
+    result
+}
+
+/// Replace recursive function calls with ih variables in a minor premise.
+/// `recursive_pairs` is a list of (pattern_bvar, ih_bvar) for each recursive field.
+/// The minor premise includes the lambda wrappers for pattern variables and ih.
+fn replace_recursive_calls(expr: &Expr, fn_name: &str, recursive_pairs: &[(u64, u64)]) -> Expr {
+    replace_recursive_calls_core(expr, fn_name, recursive_pairs, 0)
+}
+
+fn replace_recursive_calls_core(expr: &Expr, fn_name: &str, recursive_pairs: &[(u64, u64)], depth: u64) -> Expr {
+    match expr {
+        Expr::App(_, _) => {
+            let (head, args) = flatten_app(expr);
+            if let Expr::Const(name, _) = head {
+                if name.to_string() == fn_name {
+                    for arg in &args {
+                        if let Expr::BVar(bv) = arg {
+                            for (pattern_bvar, ih_bvar) in recursive_pairs {
+                                if *bv == *pattern_bvar + depth {
+                                    return Expr::mk_bvar(*ih_bvar + depth);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let new_head = replace_recursive_calls_core(head, fn_name, recursive_pairs, depth);
+            let new_args: Vec<Expr> = args.iter()
+                .map(|a| replace_recursive_calls_core(a, fn_name, recursive_pairs, depth))
+                .collect();
+            rebuild_app(new_head, new_args)
+        }
+        Expr::Lambda(name, bi, ty, body) => {
+            Expr::Lambda(
+                name.clone(),
+                *bi,
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+            )
+        }
+        Expr::Pi(name, bi, ty, body) => {
+            Expr::Pi(
+                name.clone(),
+                *bi,
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+            )
+        }
+        Expr::Let(name, ty, value, body, nondep) => {
+            Expr::Let(
+                name.clone(),
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
+                Rc::new(replace_recursive_calls_core(value, fn_name, recursive_pairs, depth)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+                *nondep,
+            )
+        }
+        Expr::MData(d, e) => {
+            Expr::MData(d.clone(), Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs, depth)))
+        }
+        Expr::Proj(s, i, e) => {
+            Expr::Proj(s.clone(), *i, Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs, depth)))
+        }
+        _ => expr.clone(),
     }
 }
 
@@ -533,7 +677,7 @@ impl Parser {
         }
     }
 
-    fn parse_decl(&mut self) -> Result<ParsedDecl, String> {
+    pub fn parse_decl(&mut self) -> Result<ParsedDecl, String> {
         self.skip_whitespace_and_comments();
         if self.starts_with_keyword("def") {
             self.parse_def_decl()
@@ -2373,5 +2517,24 @@ mod tests {
             }
             _ => panic!("Expected Calc, got {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_resolve_mk_with_quot_and_frac() {
+        use crate::repl::Repl;
+        let mut repl = Repl::new();
+        repl.set_quiet(true);
+        repl.check_files(&["lib/Nat.cic", "lib/Int.cic", "lib/Frac.cic"]).unwrap();
+        let (env, _tc, bindings, _infix, _notations) = repl.into_state();
+
+        println!("resolve_ctor_name(mk) = {:?}", env.resolve_ctor_name("mk"));
+        println!("resolve_constant_name(mk) = {:?}", env.resolve_constant_name("mk"));
+
+        // Check that mk is NOT in env_bindings as bare name
+        assert!(bindings.get("mk").is_none(), "bare 'mk' should not be in env_bindings");
+
+        // Quot.mk is a primitive (QuotInfo), not a ConstructorInfo,
+        // so resolve_ctor_name only sees Frac.mk and resolves unambiguously.
+        assert_eq!(env.resolve_ctor_name("mk"), Some(Name::new("Frac").extend("mk")));
     }
 }

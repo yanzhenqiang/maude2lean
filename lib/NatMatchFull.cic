@@ -1,0 +1,13 @@
+inductive Nat where
+| zero : Nat
+| succ : Nat -> Nat
+
+def nat_add (m : Nat) (n : Nat) : Nat :=
+  match m : Nat with
+  | zero => n
+  | succ m' => succ (nat_add m' n)
+
+def nat_mul (m : Nat) (n : Nat) : Nat :=
+  match m : Nat with
+  | zero => zero
+  | succ m' => nat_add n (nat_mul m' n)
