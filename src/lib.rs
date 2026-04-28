@@ -1,6 +1,7 @@
 pub mod declaration;
 pub mod environment;
 pub mod expr;
+pub mod format;
 pub mod local_ctx;
 pub mod repl;
 pub mod repl_parser;

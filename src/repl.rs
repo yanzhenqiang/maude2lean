@@ -1,6 +1,7 @@
 use super::declaration::*;
 use super::environment::Environment;
 use super::expr::*;
+use super::format::format_expr;
 use super::repl_parser::{ParsedDecl, ParsedExpr, Parser as ReplParser};
 use super::tactic::TacticEngine;
 use super::type_checker::{TypeChecker, TypeCheckerState};
@@ -1807,34 +1808,3 @@ pub fn execute_tactic(
     }
 }
 
-/// Pretty-print an Expr for REPL output
-pub fn format_expr(e: &Expr) -> String {
-    match e {
-        Expr::BVar(n) => format!("x{}", n),
-        Expr::Const(name, _) => name.to_string(),
-        Expr::App(_, _) => {
-            let (head, args) = e.get_app_args();
-            let head_str = if let Some(h) = head {
-                match h {
-                    Expr::Const(n, _) => n.to_string(),
-                    _ => format_expr(h),
-                }
-            } else {
-                "?".to_string()
-            };
-            let args_str: Vec<String> = args.iter().map(|a| format_expr(*a)).collect();
-            format!("{}({})", head_str, args_str.join(", "))
-        }
-        Expr::Lambda(_, _, ty, body) => {
-            format!("λ(_ : {}). {}", format_expr(ty), format_expr(body))
-        }
-        Expr::Pi(_, _, ty, body) => {
-            format!("Π(_ : {}). {}", format_expr(ty), format_expr(body))
-        }
-        Expr::Let(_, ty, val, body, _) => {
-            format!("let _ : {} := {} in {}", format_expr(ty), format_expr(val), format_expr(body))
-        }
-        Expr::Sort(l) => format!("Sort({:?})", l),
-        _ => format!("{:?}", e),
-    }
-}
