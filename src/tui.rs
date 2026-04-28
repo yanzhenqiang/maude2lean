@@ -177,19 +177,22 @@ impl TuiApp {
         let line = self.file_lines[self.selected].clone();
         let trimmed = line.trim().to_string();
 
+        // Try tactic goals first (even on empty/comment lines inside a by block)
+        if let Some(goal_lines) = self.try_tactic_goals(self.selected) {
+            for gl in &goal_lines {
+                for wrapped in self.wrap_text(gl, self.info_width() as usize) {
+                    self.info_lines.push(wrapped);
+                }
+            }
+            return;
+        }
+
         if trimmed.is_empty() {
             self.info_lines.push("⊢ (empty line)".to_string());
         } else if trimmed.starts_with("--") {
             self.info_lines.push("⊢ Comment".to_string());
         } else {
-            // Try tactic goals first (if inside a by block)
-            if let Some(goal_lines) = self.try_tactic_goals(self.selected) {
-                for gl in &goal_lines {
-                    for wrapped in self.wrap_text(gl, self.info_width() as usize) {
-                        self.info_lines.push(wrapped);
-                    }
-                }
-            } else if let Some((sig, premises, goal)) = self.try_decl_type(&trimmed) {
+            if let Some((sig, premises, goal)) = self.try_decl_type(&trimmed) {
                 // Hypotheses (Pi binders)
                 let has_premises = !premises.is_empty();
                 for p in &premises {
