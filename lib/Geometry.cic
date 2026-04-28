@@ -231,7 +231,112 @@ theorem collinear_perm : forall (A : Point), forall (B : Point), forall (C : Poi
   intro h
   exact h
 
--- Note: extracting the existential witnesses from three_non_collinear
--- requires multiple applications of choice/choice_spec.
--- This is left for future formalization once stronger exists-elimination
--- tactics are available.
+-- =====================================================================
+-- 12. Angle axioms (Hilbert Group III)
+-- =====================================================================
+
+-- Angle congruence as primitive notion: angle_congruent B A C B' A' C'
+
+axiom angle_congruent : Point -> Point -> Point -> Point -> Point -> Point -> Prop
+
+axiom angle_transfer : forall (A B C A' B' : Point),
+  Not (Eq Point A B) -> Not (Eq Point A C) -> Not (Eq Point A' B') ->
+  exists (C' : Point), angle_congruent B A C B' A' C'
+
+axiom angle_refl : forall (A B C : Point),
+  angle_congruent B A C B A C
+
+axiom angle_sym : forall (A B C A' B' C' : Point),
+  angle_congruent B A C B' A' C' -> angle_congruent B' A' C' B A C
+
+axiom angle_trans : forall (A B C A' B' C' A'' B'' C'' : Point),
+  angle_congruent B A C B' A' C' -> angle_congruent B' A' C' B'' A'' C'' ->
+  angle_congruent B A C B'' A'' C''
+
+-- Same angle with swapped side order is congruent
+axiom angle_vertex_swap : forall (A B C : Point),
+  angle_congruent B A C C A B
+
+axiom SAS : forall (A B C A' B' C' : Point),
+  seg_congruent A B A' B' ->
+  angle_congruent B A C B' A' C' ->
+  seg_congruent A C A' C' ->
+  And (seg_congruent B C B' C')
+      (And (angle_congruent A B C A' B' C')
+           (angle_congruent A C B A' C' B'))
+
+axiom ASA : forall (A B C A' B' C' : Point),
+  angle_congruent B A C B' A' C' ->
+  seg_congruent A B A' B' ->
+  angle_congruent A B C A' B' C' ->
+  And (seg_congruent A C A' C')
+-- Isosceles triangle base angles are equal
+-- Proof: Consider triangles ABC and ACB. By SAS:
+--   AB = AC (given), ∠BAC = ∠CAB (same angle), AC = AB (given)
+-- Therefore △ABC ≅ △ACB, so ∠ABC = ∠ACB.
+theorem isosceles_base_angles : forall (A B C : Point),
+  isosceles A B C -> angle_congruent A B C A C B :=
+  fun A : Point => fun B : Point => fun C : Point => fun h : isosceles A B C =>
+    and_fst (angle_congruent A B C A C B)
+      (angle_congruent A C B A B C)
+      (and_snd (seg_congruent B C C B)
+        (And (angle_congruent A B C A C B) (angle_congruent A C B A B C))
+        (SAS A B C A C B h (angle_trans B A C B A C C A B (angle_refl A B C) (angle_vertex_swap A B C)) (congruent_sym A B A C h)))
+
+-- =====================================================================
+-- 13. Right angle and parallel line properties
+-- =====================================================================
+
+-- Right angle: an angle congruent to its supplement
+-- (Simplified: an angle that is half of a straight angle)
+def right_angle (A : Point) (B : Point) (C : Point) : Prop :=
+  exists (D : Point),
+    And (between A B D)
+      (And (angle_congruent A B C D B C)
+           (angle_congruent A B C C B D))
+
+-- When a transversal cuts two parallel lines, alternate interior angles are congruent
+axiom alternate_interior_angles : forall (A B C D : Point) (l m t : Line),
+  on_line A l -> on_line C l ->
+  on_line B m -> on_line D m ->
+  on_line A t -> on_line B t ->
+  Not (Eq Point A B) ->
+  parallel l m ->
+  angle_congruent C A B D B A
+
+-- Angle addition: angles on a straight line sum to 180 degrees (two right angles)
+axiom straight_angle : forall (A B C D : Point),
+  between A B D ->
+  angle_congruent A B C D B C ->
+  angle_congruent A B C C B D
+
+-- Sum of angles in a triangle equals 180 degrees (two right angles)
+axiom triangle_angle_sum : forall (A B C : Point),
+  Not (collinear A B C) ->
+  exists (A_prime : Point), exists (B_prime : Point), exists (C_prime : Point),
+    And (right_angle A_prime B_prime C_prime)
+      (And (angle_congruent B A C A_prime B_prime C_prime)
+        (And (angle_congruent A B C A_prime B_prime C_prime)
+             (angle_congruent A C B A_prime C_prime B_prime)))
+
+-- =====================================================================
+-- 14. Midpoint and perpendicular bisector
+-- =====================================================================
+
+-- Midpoint uniqueness: a segment has at most one midpoint
+-- (Currently an axiom; full proof requires SSS congruence criterion)
+axiom midpoint_unique : forall (M1 M2 A B : Point),
+  midpoint M1 A B -> midpoint M2 A B -> Eq Point M1 M2
+
+-- Perpendicular bisector existence
+-- Given segment AB, there exists a line perpendicular to AB at its midpoint
+def perpendicular_bisector (A : Point) (B : Point) : Prop :=
+  exists (M : Point), exists (l : Line),
+    And (midpoint M A B)
+      (And (on_line M l)
+        (forall (P : Point), on_line P l -> Not (Eq Point P M) ->
+          right_angle A M P))
+
+-- Existence of perpendicular bisector (axiom for now)
+axiom perpendicular_bisector_exists : forall (A : Point) (B : Point),
+  Not (Eq Point A B) -> perpendicular_bisector A B

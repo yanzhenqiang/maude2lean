@@ -57,6 +57,7 @@
 
 ## Completed (Recently)
 
+- [x] TUI: show tactic goals on empty/comment lines inside `by` blocks (Lean-like infoview behavior)
 - [x] Fix binder-aware MVar substitution in `TacticEngine` (convert FVars to BVars during `build_proof`)
 - [x] Rewrite `lib/Complete.cic` proofs to `by` tactic style (`cauchy_complete`, `const_seq_converges`)
 - [x] Convert simple term-style proofs to `by` style (`collinear_perm`, `frac_abs_zero`, `frac_lt_zero_one`, etc.)
@@ -64,3 +65,4 @@
 - [x] Extract and enhance universal expression formatter (`src/format.rs`)
 - [x] Clean up debug output `.txt` files
 - [x] Remove duplicate match-based Nat library files
+- [x] Clean up temporary `lib/test.cic` file

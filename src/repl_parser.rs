@@ -637,44 +637,7 @@ impl Parser {
     }
 
     fn skip_whitespace_and_comments(&mut self) {
-        loop {
-            self.skip_whitespace();
-            // Skip line comments: -- ...\n
-            if self.peek() == Some('-') && self.input.get(self.pos + 1) == Some(&'-') {
-                while let Some(c) = self.peek() {
-                    self.advance();
-                    if c == '\n' {
-                        break;
-                    }
-                }
-                continue;
-            }
-            // Skip block comments: /- ... -/
-            if self.peek() == Some('/') && self.input.get(self.pos + 1) == Some(&'-') {
-                self.advance();
-                self.advance();
-                let mut depth = 1;
-                while depth > 0 {
-                    if let Some(c) = self.peek() {
-                        if c == '/' && self.input.get(self.pos + 1) == Some(&'-') {
-                            self.advance();
-                            self.advance();
-                            depth += 1;
-                        } else if c == '-' && self.input.get(self.pos + 1) == Some(&'/') {
-                            self.advance();
-                            self.advance();
-                            depth -= 1;
-                        } else {
-                            self.advance();
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                continue;
-            }
-            break;
-        }
+        self.skip_whitespace();
     }
 
     pub fn parse_decl(&mut self) -> Result<ParsedDecl, String> {
@@ -1250,12 +1213,49 @@ impl Parser {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(c) = self.peek() {
-            if c.is_whitespace() {
-                self.advance();
-            } else {
-                break;
+        loop {
+            while let Some(c) = self.peek() {
+                if c.is_whitespace() {
+                    self.advance();
+                } else {
+                    break;
+                }
             }
+            // Skip line comments: -- ...\n
+            if self.peek() == Some('-') && self.input.get(self.pos + 1) == Some(&'-') {
+                while let Some(c) = self.peek() {
+                    self.advance();
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            // Skip block comments: /- ... -/
+            if self.peek() == Some('/') && self.input.get(self.pos + 1) == Some(&'-') {
+                self.advance();
+                self.advance();
+                let mut depth = 1;
+                while depth > 0 {
+                    if let Some(c) = self.peek() {
+                        if c == '/' && self.input.get(self.pos + 1) == Some(&'-') {
+                            self.advance();
+                            self.advance();
+                            depth += 1;
+                        } else if c == '-' && self.input.get(self.pos + 1) == Some(&'/') {
+                            self.advance();
+                            self.advance();
+                            depth -= 1;
+                        } else {
+                            self.advance();
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            break;
         }
     }
 
