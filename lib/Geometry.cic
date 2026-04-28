@@ -98,6 +98,10 @@ axiom congruent_sym : forall (A : Point), forall (B : Point), forall (C : Point)
 axiom congruent_trans : forall (A : Point), forall (B : Point), forall (C : Point), forall (D : Point), forall (E : Point), forall (F : Point),
   seg_congruent A B C D -> seg_congruent C D E F -> seg_congruent A B E F
 
+-- Endpoint swap (needed because our formalization uses ordered quadruples)
+axiom congruent_swap : forall (A : Point), forall (B : Point),
+  Not (Eq Point A B) -> seg_congruent A B B A
+
 -- C5: Addition
 axiom congruent_add : forall (A : Point), forall (B : Point), forall (C : Point), forall (A' : Point), forall (B' : Point), forall (C' : Point),
   between A B C -> between A' B' C' ->
@@ -468,6 +472,41 @@ def rectangle (A : Point) (B : Point) (C : Point) (D : Point) : Prop :=
 
 -- =====================================================================
 -- 21. Derived theorems from SSS
+-- =====================================================================
+
+-- =====================================================================
+-- 22. Visually meaningful theorems
+-- =====================================================================
+
+-- Equilateral triangle implies isosceles
+theorem equilateral_implies_isosceles : forall (A B C : Point),
+  Not (Eq Point A B) -> Not (Eq Point B C) -> Not (Eq Point A C) ->
+  equilateral A B C -> isosceles A B C := by
+  intro A
+  intro B
+  intro C
+  intro h1
+  intro h2
+  intro h3
+  intro heq
+  exact (congruent_trans A B C A A C
+    (congruent_trans A B B C C A
+      (and_fst (seg_congruent A B B C) (seg_congruent B C C A) heq)
+      (and_snd (seg_congruent A B B C) (seg_congruent B C C A) heq))
+    (congruent_sym A C C A (congruent_swap A C h3)))
+
+-- Rectangle is a parallelogram
+theorem rectangle_is_parallelogram : forall (A B C D : Point),
+  rectangle A B C D -> parallelogram A B C D := by
+  intro A
+  intro B
+  intro C
+  intro D
+  intro h
+  exact (and_fst (parallelogram A B C D) (right_angle D A B) h)
+
+-- =====================================================================
+-- 23. Derived definitions (alternative formulations)
 -- =====================================================================
 
 -- Isosceles triangle: base angles are equal (already proven via SAS)

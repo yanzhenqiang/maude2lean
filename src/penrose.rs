@@ -9,7 +9,6 @@ use std::path::Path;
 
 use crate::environment::Environment;
 use crate::expr::{Expr, Name};
-use crate::format::format_expr;
 
 /// Generate Penrose trio files (.domain, .substance, .style) from geometry declarations.
 pub fn export_geometry(
@@ -132,7 +131,6 @@ forall Line l; Line m where Parallel(l, m) {
 
 -- Perpendicular lines form a right angle
 forall Line l; Line m where Perpendicular(l, m) {
-    -- This is a weak constraint; exact right angle is hard without coordinates
     encourage equal(vdist(l.icon.start, m.icon.start), vdist(l.icon.end, m.icon.end))
 }
 
@@ -140,6 +138,27 @@ forall Line l; Line m where Perpendicular(l, m) {
 forall Point a; Point b; Point c where Triangle(a, b, c) {
     ensure distinct(a.icon, b.icon, c.icon)
     encourage not(Collinear(a, b, c))
+}
+
+-- Isosceles triangle: two sides should be roughly equal in length
+forall Point a; Point b; Point c where Isosceles(a, b, c) {
+    encourage equal(vdist(a.icon.center, b.icon.center), vdist(a.icon.center, c.icon.center))
+}
+
+-- Equilateral triangle: all three sides roughly equal
+forall Point a; Point b; Point c where Equilateral(a, b, c) {
+    encourage equal(vdist(a.icon.center, b.icon.center), vdist(b.icon.center, c.icon.center))
+    encourage equal(vdist(b.icon.center, c.icon.center), vdist(c.icon.center, a.icon.center))
+}
+
+-- SegCongruent: the two segments should have similar lengths
+forall Point a; Point b; Point c; Point d where SegCongruent(a, b, c, d) {
+    encourage equal(vdist(a.icon.center, b.icon.center), vdist(c.icon.center, d.icon.center))
+}
+
+-- AngleCongruent: place the angles at corresponding vertices
+forall Point b; Point a; Point c; Point b2; Point a2; Point c2 where AngleCongruent(b, a, c, b2, a2, c2) {
+    encourage equal(angleBetween(a.icon.center, b.icon.center, c.icon.center), angleBetween(a2.icon.center, b2.icon.center, c2.icon.center))
 }
 
 -- Non-degeneracy: distinct points should not overlap
@@ -155,31 +174,38 @@ forall Point p {
     .to_string()
 }
 
+/// Default mode: scan environment for geometry-related declarations and generate
+/// a focused substance program.
 fn generate_substance_all(env: &Environment) -> String {
-    let mut out = String::from("-- Auto-generated Substance program from CIC geometry declarations\n\n");
+    let mut out = String::from("-- Auto-generated Substance program (geometry only)\n\n");
 
-    let mut points = HashSet::new();
-
+    let mut any = false;
     env.for_each_constant(|info| {
-        let name_str = info.name().to_string();
-        if is_geometry_predicate(&name_str) {
+        let name = info.name().to_string();
+        // Only consider axioms, theorems, and definitions whose names are
+        // geometry predicates or theorems (not recursors/constructors).
+        let is_geo = is_geometry_predicate(&name)
+            || name.contains("_angle") || name.contains("parallel")
+            || name.contains("perpendicular") || name.contains("midpoint")
+            || name.contains("collinear") || name.contains("triangle")
+            || name.contains("isosceles") || name.contains("equilateral")
+            || name.contains("between") || name.contains("segment")
+            || name.contains("right_") || name.contains("circle")
+            || name.contains("rectangle") || name.contains("parallelogram");
+        if is_geo && (info.is_axiom() || info.is_theorem() || info.is_definition()) {
+            any = true;
+            out.push_str(&format!("-- {}\n", name));
             let ty = info.get_type();
-            let arg_names = extract_arg_names_from_type(ty);
-            for an in &arg_names {
-                if is_point_name(an) && points.insert(an.clone()) {
-                    out.push_str(&format!("Point {}\n", an));
-                }
+            if let Ok(sub) = theorem_type_to_substance(ty) {
+                out.push_str(&sub);
             }
-            let pred_name = penrose_predicate_name(&name_str);
-            if !pred_name.is_empty() && !arg_names.is_empty() {
-                out.push_str(&format!("{}({})\n", pred_name, arg_names.join(", ")));
-            }
+            out.push('\n');
         }
     });
 
-    if out.trim() == "-- Auto-generated Substance program from CIC geometry declarations" {
-        out.push_str("-- No geometry predicates found; add a theorem name to generate a specific diagram.\n");
-        out.push_str("\nPoint A, B, C\n");
+    if !any {
+        out.push_str("-- No geometry statements found.\n");
+        out.push_str("Point A, B, C\n");
         out.push_str("Triangle(A, B, C)\n");
     }
 
@@ -192,42 +218,66 @@ fn generate_substance_for_theorem(env: &Environment, theorem_name: &str) -> Resu
 
     let ty = info.get_type();
     let mut out = String::new();
-    out.push_str(&format!("-- Substance for theorem: {}\n", theorem_name));
-    out.push_str(&format!("-- Type: {}\n\n", format_expr(ty)));
+    out.push_str(&format!("-- Theorem: {}\n", theorem_name));
+    out.push_str(&theorem_type_to_substance(ty)?);
+    Ok(out)
+}
 
-    // Extract parameter names from Pi binders
+/// Convert a theorem's Pi-type into Penrose Substance statements.
+/// Handles BVar-to-parameter-name resolution at the correct de Bruijn depth.
+fn theorem_type_to_substance(ty: &Expr) -> Result<String, String> {
     let (params, conclusion) = collect_pi_params(ty);
+    let n = params.len();
 
-    // Declare points based on parameter names
-    let mut points = HashSet::new();
-    for (name, _) in &params {
-        let short = clean_param_name(name);
-        if is_point_name(&short) {
-            if points.insert(short.clone()) {
-                out.push_str(&format!("Point {}\n", short));
+    // BVar resolution: in a context with `base_depth` enclosing binders,
+    // BVar(k) refers to params[base_depth - 1 - k].
+    let bvar_name = |base_depth: usize, k: u64| -> String {
+        let k = k as usize;
+        if k < base_depth && base_depth >= 1 {
+            let idx = base_depth - 1 - k;
+            if idx < n {
+                return clean_param_name(&params[idx].0);
             }
         }
-    }
+        format!("v{}", k)
+    };
 
-    // If no points found, add defaults
-    if points.is_empty() {
-        out.push_str("Point A, B, C\n");
-        points.insert("A".to_string());
-        points.insert("B".to_string());
-        points.insert("C".to_string());
-    }
+    let mut out = String::new();
 
-    // Try to infer predicates from conclusion
-    if let Some(pred_str) = extract_predicate_from_expr(conclusion) {
-        out.push('\n');
-        out.push_str(&pred_str);
-    } else {
-        // Default: assume it's a triangle
-        let pts: Vec<_> = points.into_iter().collect();
-        if pts.len() >= 3 {
-            out.push('\n');
-            out.push_str(&format!("Triangle({}, {}, {})\n", pts[0], pts[1], pts[2]));
+    // Declare points and lines from parameter types
+    let mut points = HashSet::new();
+    for (name, pty) in &params {
+        let short = clean_param_name(name);
+        if is_point_name(&short) && points.insert(short.clone()) {
+            out.push_str(&format!("Point {}\n", short));
         }
+        if is_line_type(pty) && points.insert(format!("line_{}", short)) {
+            out.push_str(&format!("Line {}\n", short));
+        }
+    }
+
+    // Extract hypotheses: each parameter i lives at depth i
+    let mut has_hypothesis = false;
+    for i in 0..n {
+        let (_name, pty) = &params[i];
+        if let Some(pred_str) = expr_to_substance_predicate(pty, i, &bvar_name) {
+            if !has_hypothesis {
+                out.push('\n');
+                out.push_str("-- Given:\n");
+                has_hypothesis = true;
+            }
+            out.push_str(&pred_str);
+        }
+    }
+
+    // Extract conclusion at full depth n
+    if let Some(pred_str) = expr_to_substance_predicate(conclusion, n, &bvar_name) {
+        out.push('\n');
+        out.push_str("-- Prove:\n");
+        out.push_str(&pred_str);
+    } else if points.is_empty() {
+        out.push_str("Point A, B, C\n");
+        out.push_str("Triangle(A, B, C)\n");
     }
 
     Ok(out)
@@ -264,13 +314,15 @@ fn is_point_name(name: &str) -> bool {
     name.len() == 1 && name.chars().next().unwrap().is_uppercase()
 }
 
-fn clean_param_name(name: &str) -> String {
-    name.split('.').next().unwrap_or(name).to_string()
+fn is_line_type(e: &Expr) -> bool {
+    match e {
+        Expr::Const(name, _) => name.to_string() == "Line",
+        _ => false,
+    }
 }
 
-fn extract_arg_names_from_type(e: &Expr) -> Vec<String> {
-    let (params, _) = collect_pi_params(e);
-    params.into_iter().map(|(n, _)| clean_param_name(&n)).filter(|n| is_point_name(n)).collect()
+fn clean_param_name(name: &str) -> String {
+    name.split('.').next().unwrap_or(name).to_string()
 }
 
 fn collect_pi_params<'a>(e: &'a Expr) -> (Vec<(String, &'a Expr)>, &'a Expr) {
@@ -288,7 +340,12 @@ fn collect_pi_params<'a>(e: &'a Expr) -> (Vec<(String, &'a Expr)>, &'a Expr) {
     (params, current)
 }
 
-fn extract_predicate_from_expr(e: &Expr) -> Option<String> {
+/// Convert a predicate application into Penrose Substance, resolving BVars at the
+/// given de Bruijn depth.
+fn expr_to_substance_predicate<F>(e: &Expr, base_depth: usize, bvar_name: &F) -> Option<String>
+where
+    F: Fn(usize, u64) -> String,
+{
     let (head, args) = e.get_app_args();
     let head = head?;
     if let Expr::Const(name, _) = head {
@@ -296,11 +353,7 @@ fn extract_predicate_from_expr(e: &Expr) -> Option<String> {
         if is_geometry_predicate(&name_str) {
             let pred = penrose_predicate_name(&name_str);
             let arg_names: Vec<String> = args.iter()
-                .filter_map(|a| match a {
-                    Expr::FVar(n) => Some(n.to_string()),
-                    Expr::BVar(n) => Some(format!("v{}", n)),
-                    _ => None,
-                })
+                .filter_map(|a| expr_to_arg_name(a, base_depth, bvar_name))
                 .collect();
             if !pred.is_empty() && !arg_names.is_empty() {
                 return Some(format!("{}({})\n", pred, arg_names.join(", ")));
@@ -308,4 +361,15 @@ fn extract_predicate_from_expr(e: &Expr) -> Option<String> {
         }
     }
     None
+}
+
+fn expr_to_arg_name<F>(e: &Expr, base_depth: usize, bvar_name: &F) -> Option<String>
+where
+    F: Fn(usize, u64) -> String,
+{
+    match e {
+        Expr::FVar(n) => Some(n.to_string()),
+        Expr::BVar(n) => Some(bvar_name(base_depth, *n)),
+        _ => None,
+    }
 }
