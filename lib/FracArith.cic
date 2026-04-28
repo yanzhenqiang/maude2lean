@@ -46,12 +46,13 @@ theorem int_add_zero_left : forall (b : Int), Eq Int (int_add (ofNat 0) b) b :=
       b
 
 -- int_mul (ofNat 1) (ofNat n) = ofNat n
-theorem int_mul_one_left_ofNat : forall (n : Nat), Eq Int (int_mul (ofNat 1) (ofNat n)) (ofNat n) :=
-  fun n : Nat => refl Int (ofNat n)
+theorem int_mul_one_left_ofNat : forall (n : Nat), Eq Int (int_mul (ofNat 1) (ofNat n)) (ofNat n) := by
+  intro n
+  refl
 
 -- int_abs (ofNat 0) = ofNat 0
-theorem int_abs_zero : Eq Int (int_abs (ofNat 0)) (ofNat 0) :=
-  refl Int (ofNat 0)
+theorem int_abs_zero : Eq Int (int_abs (ofNat 0)) (ofNat 0) := by
+  refl
 
 -- Auxiliary theorem: int_add (ofNat (succ n)) (negSucc n) = ofNat 0
 theorem int_add_ofNat_negSucc_eq : forall (n : Nat), Eq Int (int_add (ofNat (succ n)) (negSucc n)) (ofNat 0) :=
@@ -155,12 +156,13 @@ theorem frac_mul_comm : forall (x : Frac) (y : Frac), Eq Frac (frac_mul x y) (fr
 -- theorem frac_sub_self : forall (a : Frac), Eq Frac (frac_sub a a) frac_zero := ...
 
 -- frac_abs frac_zero = frac_zero
-theorem frac_abs_zero : Eq Frac (frac_abs frac_zero) frac_zero :=
-  refl Frac frac_zero
+theorem frac_abs_zero : Eq Frac (frac_abs frac_zero) frac_zero := by
+  refl
 
 -- frac_abs (mk (ofNat 0) d) = mk (ofNat 0) d (absolute value of zero is unchanged)
-theorem frac_abs_ofNat_zero : forall (d : Nat), Eq Frac (frac_abs (mk (ofNat 0) d)) (mk (ofNat 0) d) :=
-  fun d : Nat => refl Frac (mk (ofNat 0) d)
+theorem frac_abs_ofNat_zero : forall (d : Nat), Eq Frac (frac_abs (mk (ofNat 0) d)) (mk (ofNat 0) d) := by
+  intro d
+  refl
 
 -- =====================================================================
 -- Fraction order lemmas
@@ -168,13 +170,16 @@ theorem frac_abs_ofNat_zero : forall (d : Nat), Eq Frac (frac_abs (mk (ofNat 0) 
 
 -- Zero is less than any positive fraction: frac_lt frac_zero (mk (ofNat 1) k) holds for all k
 -- frac_lt (mk 0 0) (mk 1 k) reduces to le 1 1 = le (succ 0) (succ 0)
-theorem frac_lt_zero_one : forall (k : Nat), frac_lt frac_zero (mk (ofNat 1) k) :=
-  fun k : Nat => le_succ zero zero (le_zero zero)
+theorem frac_lt_zero_one : forall (k : Nat), frac_lt frac_zero (mk (ofNat 1) k) := by
+  intro k
+  exact (le_succ zero zero (le_zero zero))
 
 -- frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) holds for all d, k
 -- reduces to le 1 (succ d) = le (succ 0) (succ d)
-theorem frac_lt_zero_pos : forall (d : Nat) (k : Nat), frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) :=
-  fun d : Nat => fun k : Nat => le_succ zero d (le_zero d)
+theorem frac_lt_zero_pos : forall (d : Nat) (k : Nat), frac_lt (mk (ofNat 0) d) (mk (ofNat 1) k) := by
+  intro d
+  intro k
+  exact (le_succ zero d (le_zero d))
 
 -- frac_lt (frac_abs (frac_sub a a)) (frac_inv k)
 -- Real proof: numerator of frac_sub a a is int_sub x x = ofNat 0, denominator is positive

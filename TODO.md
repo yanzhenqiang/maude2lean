@@ -2,22 +2,65 @@
 
 ## Code Quality / Readability
 
-- **Refactor `Goal.needs_cdecl_abstraction`**: The flag distinguishing function subgoals (need CDecl abstraction) from plain proof subgoals (don't need) is a workaround. A cleaner approach would be to track goal kind explicitly or redesign the mvar system so subgoals inherently know whether they represent function bodies or proof terms.
-  - **Status**: Replaced `needs_cdecl_abstraction: bool` with `GoalKind` enum (`Proof` / `Function`). `tactic_induction` creates minor-premise subgoals as `GoalKind::Function`; all other subgoals are `GoalKind::Proof`. This makes the distinction explicit and self-documenting.
-- **Reduce hardcoding in Rust**: Constructor names like `Eq.refl`, `Nat.zero`, `Nat.succ` are hardcoded in tactic.rs and repl_parser.rs. Consider a registry-driven approach where the kernel exposes constructor metadata so the parser/tactic engine doesn't need string constants.
-  - **Status**: `Eq.refl` in `tactic.rs` already uses `env.get_constructor`. Numeric literals in `repl_parser.rs` now use `ParsedExpr::NatLit(n)` with deferred expansion in `to_expr` via `env.get_constructor`, eliminating `NAT_ZERO_CTOR`/`NAT_SUCC_CTOR` constants.
-- **Clean up `to_expr` namespace resolution**: The bare-name-to-namespaced fallback in `repl_parser.rs` works but could be more principled with a dedicated name-resolution pass.
-  - **Status**: Extracted a standalone `resolve_name` function in `repl_parser.rs` that performs resolution in a clear priority order: (1) bound variables, (2) env_bindings exact match, (3) constructor registry (`resolve_ctor_name`), (4) general constant registry (`resolve_constant_name`), (5) exact hierarchical lookup in environment, (6) fallback to unverified Const. Also added `Environment::resolve_constant_name` to generalize bare-name resolution beyond constructors. The `to_expr` Const branch is now a single call to `resolve_name`.
+- **Refactor `Goal.needs_cdecl_abstraction`**:
+  - **Status**: DONE. Replaced `needs_cdecl_abstraction: bool` with `GoalKind` enum (`Proof` / `Function`).
+
+- **Reduce hardcoding in Rust**:
+  - **Status**: DONE. `Eq.refl` in `tactic.rs` uses `env.get_constructor`. Numeric literals use `ParsedExpr::NatLit(n)` with deferred expansion via `env.get_constructor`.
+
+- **Clean up `to_expr` namespace resolution**:
+  - **Status**: DONE. Extracted `resolve_name` function with 6-tier priority resolution. Added `Environment::resolve_constant_name`.
+
+- **Extract universal expression formatter**:
+  - **Status**: DONE. Created `src/format.rs` with shared `format_expr`. Supports infix operators (`+`, `-`, `*`, `/`, `=`, `<=`, `And`, `Or`, etc.), numeric literal detection (`succ^n zero` -> `n`), binder name tracking, FVar prettification. REPL, TUI, and CLI all use the shared formatter.
 
 ## Known Issues
 
-- **Match-based recursive definitions cause segfault in batch mode**: When `Nat.cic` or `Int.cic` use `match` for recursive definitions (`nat_add`, `nat_mul`, `int_add`), type-checking deeply nested proofs in downstream files (e.g., `NatProof.cic`) triggers a segfault. This appears to be a state contamination or stack-overflow issue in the type checker when processing match-desugared recursor expressions. Currently reverted to hand-written `rec.Nat`/`rec.Int` in those files.
+- **Match-based recursive definitions cause segfault in batch mode**:
+  - `desugar_match` now correctly replaces recursive calls with `ih` variables (the root cause was fixed).
+  - However, using `match` for `nat_add`/`nat_mul` in `Nat.cic` still triggers a segfault when checking deeply nested proofs in downstream files (`NatProof.cic`). This appears to be a state contamination or stack-overflow issue in the type checker when processing match-desugared recursor expressions. Currently reverted to hand-written `rec.Nat` in `Nat.cic`. The fix in `repl_parser.rs` is preserved for future investigation.
 
-## Future Mathematical Libraries
+## In Progress / Next Tasks
 
-- **Euclidean Geometry Axiom System**: Define axioms for Euclidean geometry (points, lines, incidence, betweenness, congruence) following Hilbert or Tarski. Build toward proving classic theorems (e.g., sum of angles in a triangle).
-  - **Status**: Initial framework complete in `lib/Geometry.cic`. Includes Hilbert-style axioms (I1-I3 incidence, O1-O4 order, C1-C5 congruence, Playfair parallel), basic definitions (collinear, segment, triangle, ray, midpoint, isosceles, equilateral), and sample theorems (between_implies_collinear, parallel_sym, parallel_through construction via choice).
+### 1. Euclidean Geometry Theorems
+- **Status**: `lib/Geometry.cic` has Hilbert-style axioms (I1-I3 incidence, O1-O4 order, C1-C5 congruence, Playfair parallel), basic definitions (collinear, segment, triangle, ray, midpoint, isosceles, equilateral), and sample theorems.
+- **Blocker**: To prove SSS/SAS/ASA, angle sum, isosceles base angles, etc., we need additional axioms/definitions for angles and angle congruence, which are not yet in the system.
+- **Next steps**:
+  1. Add angle definitions and angle congruence axioms
+  2. Prove triangle congruence criteria (SSS, SAS, ASA)
+  3. Prove sum of angles in a triangle = 180 degrees
+  4. Prove isosceles triangle base angles are equal
+  5. Prove midpoint uniqueness and perpendicular bisector existence
 
-## Visualization / UX
+### 2. Real Analysis Library
+- **Goal**: Build real analysis on top of existing real number construction (Frac -> Real via Cauchy sequences).
+- **Topics**:
+  1. Real number properties (completeness [DONE in Complete.cic], Archimedean property, density of rationals)
+  2. Sequence convergence definitions and basic theorems
+  3. Function continuity definition and properties
+  4. Function derivative definition
+  5. Differential rules (chain rule, product rule, quotient rule)
+  6. Riemann integral definition
+  7. Fundamental Theorem of Calculus
+  8. L'Hôpital's Rule
+  9. Green's Formula (2D)
+  10. Complex numbers (as pairs of reals)
+  11. Cauchy's theorem for complex integration
 
-- **Penrose-like Diagram Generation**: Given geometric constructions or commutative diagrams stated in CIC, generate declarative diagrams (similar to [Penrose](https://penrose.cs.cmu.edu/)) from proof terms or definitions.
+### 3. Penrose-like Diagram Generation
+- **Idea**: Given geometric constructions or commutative diagrams stated in CIC, generate declarative diagrams (similar to [Penrose](https://penrose.cs.cmu.edu/)) from proof terms or definitions.
+- **Approach**:
+  - Parse geometric definitions (`Point`, `Line`, `on_line`, `between`) from `lib/Geometry.cic`
+  - Generate a declarative diagram specification (e.g., constraint-based layout)
+  - Output to a simple format (SVG, TikZ, or ASCII art) that can be rendered
+  - Could start with ASCII art for immediate feedback, then upgrade to SVG
+
+## Completed (Recently)
+
+- [x] Fix binder-aware MVar substitution in `TacticEngine` (convert FVars to BVars during `build_proof`)
+- [x] Rewrite `lib/Complete.cic` proofs to `by` tactic style (`cauchy_complete`, `const_seq_converges`)
+- [x] Convert simple term-style proofs to `by` style (`collinear_perm`, `frac_abs_zero`, `frac_lt_zero_one`, etc.)
+- [x] Fix match-based recursive definitions (replace recursive calls with ih in minor premises)
+- [x] Extract and enhance universal expression formatter (`src/format.rs`)
+- [x] Clean up debug output `.txt` files
+- [x] Remove duplicate match-based Nat library files

@@ -59,22 +59,24 @@ def limit_real (a : Nat -> Frac) (h : is_cauchy a) : Real :=
 -- 1. Extract witness from is_cauchy a: cauchy_N a h k
 -- 2. Construct limit sequence: limit_seq a h k = a (succ (cauchy_N a h k))
 -- 3. Prove this sequence converges to limit_real a h
-theorem cauchy_complete : forall (a : Nat -> Frac), is_cauchy a -> exists (L : Real), seq_converges_to a L :=
-  fun a : Nat -> Frac => fun h : is_cauchy a =>
-    intro Real (fun L : Real => seq_converges_to a L) (limit_real a h)
-      (fun k : Nat =>
-        intro Nat (fun N : Nat => forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub (a n) (a (succ (cauchy_N a h k))))) (frac_inv k))
-          (cauchy_N a h k)
-          (fun n : Nat => fun h_n : gt n (cauchy_N a h k) =>
-            cauchy_self_dist a h k n h_n))
+theorem cauchy_complete : forall (a : Nat -> Frac), is_cauchy a -> exists (L : Real), seq_converges_to a L := by
+  intro a
+  intro h
+  exists (limit_real a h)
+  intro k
+  exists (cauchy_N a h k)
+  intro n
+  intro h_n
+  exact (cauchy_self_dist a h k n h_n)
 
 -- Constant sequence converges to itself
-theorem const_seq_converges : forall (c : Frac), seq_converges_to (fun n : Nat => c) (real_mk (fun n : Nat => c)) :=
-  fun c : Frac =>
-    fun k : Nat =>
-      intro Nat (fun N : Nat => forall (n : Nat), gt n N -> frac_lt (frac_abs (frac_sub c c)) (frac_inv k))
-        0
-        (fun n : Nat => fun _ : gt n 0 => frac_dist_self c k)
+theorem const_seq_converges : forall (c : Frac), seq_converges_to (fun n : Nat => c) (real_mk (fun n : Nat => c)) := by
+  intro c
+  intro k
+  exists 0
+  intro n
+  intro _
+  exact (frac_dist_self c k)
 
 -- Zero sequence converges to zero real number
 theorem zero_seq_converges : seq_converges_to (fun n : Nat => nat_to_frac 0) real_zero :=

@@ -224,8 +224,12 @@ def equilateral (A : Point) (B : Point) (C : Point) : Prop :=
 
 -- Collinearity is preserved under permutation of points
 theorem collinear_perm : forall (A : Point), forall (B : Point), forall (C : Point),
-  collinear A B C -> collinear B A C :=
-  fun A : Point => fun B : Point => fun C : Point => fun h : collinear A B C => h
+  collinear A B C -> collinear B A C := by
+  intro A
+  intro B
+  intro C
+  intro h
+  exact h
 
 -- Note: extracting the existential witnesses from three_non_collinear
 -- requires multiple applications of choice/choice_spec.

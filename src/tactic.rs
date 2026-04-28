@@ -156,38 +156,114 @@ impl<'a> TacticEngine<'a> {
 
     /// Build the final proof term by substituting all MVar assignments
     pub fn build_proof(&self, root: &Expr) -> Expr {
-        self.instantiate_mvars(root)
+        self.instantiate_mvars(root, 0)
     }
 
-    fn instantiate_mvars(&self, e: &Expr) -> Expr {
+    /// Convert free variables introduced by tactic_intro into bound variables.
+    /// `depth` is the number of enclosing binders (Lambda/Pi/Let) in the AST.
+    fn convert_fvars_to_bvars(&self, e: &Expr, depth: usize) -> Expr {
+        match e {
+            Expr::FVar(name) => {
+                // Search introduced_vars from outermost to innermost to find the
+                // position of this FVar. The BVar index is depth - 1 - position.
+                for (i, (_, _, unique_name, _)) in self.introduced_vars.iter().enumerate() {
+                    if unique_name == name {
+                        let bvar_idx = depth - 1 - i;
+                        return Expr::mk_bvar(bvar_idx as u64);
+                    }
+                }
+                e.clone()
+            }
+            Expr::App(f, a) => {
+                Expr::App(
+                    Rc::new(self.convert_fvars_to_bvars(f, depth)),
+                    Rc::new(self.convert_fvars_to_bvars(a, depth)),
+                )
+            }
+            Expr::Lambda(name, bi, ty, body) => {
+                Expr::Lambda(
+                    name.clone(),
+                    *bi,
+                    Rc::new(self.convert_fvars_to_bvars(ty, depth)),
+                    Rc::new(self.convert_fvars_to_bvars(body, depth + 1)),
+                )
+            }
+            Expr::Pi(name, bi, ty, body) => {
+                Expr::Pi(
+                    name.clone(),
+                    *bi,
+                    Rc::new(self.convert_fvars_to_bvars(ty, depth)),
+                    Rc::new(self.convert_fvars_to_bvars(body, depth + 1)),
+                )
+            }
+            Expr::Let(name, ty, val, body, nd) => {
+                Expr::Let(
+                    name.clone(),
+                    Rc::new(self.convert_fvars_to_bvars(ty, depth)),
+                    Rc::new(self.convert_fvars_to_bvars(val, depth)),
+                    Rc::new(self.convert_fvars_to_bvars(body, depth + 1)),
+                    *nd,
+                )
+            }
+            Expr::Proj(name, idx, e) => {
+                Expr::Proj(name.clone(), *idx, Rc::new(self.convert_fvars_to_bvars(e, depth)))
+            }
+            Expr::MData(md, e) => {
+                Expr::MData(md.clone(), Rc::new(self.convert_fvars_to_bvars(e, depth)))
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Recursively substitute MVars with their assignments, tracking binder depth
+    /// so that FVars from tactic_intro are correctly converted to BVars.
+    fn instantiate_mvars(&self, e: &Expr, depth: usize) -> Expr {
         match e {
             Expr::MVar(name) => {
                 if let Some(val) = self.mvar_assignments.get(name) {
-                    self.instantiate_mvars(val)
+                    // Convert FVars to BVars at the current depth, then recurse
+                    let converted = self.convert_fvars_to_bvars(val, depth);
+                    self.instantiate_mvars(&converted, depth)
                 } else {
                     e.clone()
                 }
             }
             Expr::App(f, a) => {
                 Expr::App(
-                    Rc::new(self.instantiate_mvars(f)),
-                    Rc::new(self.instantiate_mvars(a)),
+                    Rc::new(self.instantiate_mvars(f, depth)),
+                    Rc::new(self.instantiate_mvars(a, depth)),
                 )
             }
             Expr::Lambda(name, bi, ty, body) => {
-                Expr::Lambda(name.clone(), *bi, Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(body)))
+                Expr::Lambda(
+                    name.clone(),
+                    *bi,
+                    Rc::new(self.instantiate_mvars(ty, depth)),
+                    Rc::new(self.instantiate_mvars(body, depth + 1)),
+                )
             }
             Expr::Pi(name, bi, ty, body) => {
-                Expr::Pi(name.clone(), *bi, Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(body)))
+                Expr::Pi(
+                    name.clone(),
+                    *bi,
+                    Rc::new(self.instantiate_mvars(ty, depth)),
+                    Rc::new(self.instantiate_mvars(body, depth + 1)),
+                )
             }
             Expr::Let(name, ty, val, body, nd) => {
-                Expr::Let(name.clone(), Rc::new(self.instantiate_mvars(ty)), Rc::new(self.instantiate_mvars(val)), Rc::new(self.instantiate_mvars(body)), *nd)
+                Expr::Let(
+                    name.clone(),
+                    Rc::new(self.instantiate_mvars(ty, depth)),
+                    Rc::new(self.instantiate_mvars(val, depth)),
+                    Rc::new(self.instantiate_mvars(body, depth + 1)),
+                    *nd,
+                )
             }
             Expr::Proj(name, idx, e) => {
-                Expr::Proj(name.clone(), *idx, Rc::new(self.instantiate_mvars(e)))
+                Expr::Proj(name.clone(), *idx, Rc::new(self.instantiate_mvars(e, depth)))
             }
             Expr::MData(md, e) => {
-                Expr::MData(md.clone(), Rc::new(self.instantiate_mvars(e)))
+                Expr::MData(md.clone(), Rc::new(self.instantiate_mvars(e, depth)))
             }
             other => other.clone(),
         }
@@ -213,14 +289,20 @@ impl<'a> TacticEngine<'a> {
         }
     }
 
-    /// Introduce a variable from a Pi target
+    /// Introduce a variable from a Pi target.
+    /// Creates a new goal with the introduced variable and assigns the old goal
+    /// to a lambda abstracting the variable.
     pub fn tactic_intro(&mut self, name: &str) -> Result<(), String> {
         let target;
         let lctx;
+        let goal_mvar;
+        let goal_kind;
         {
-            let goal = self.current_goal_mut().ok_or("No goals remaining")?;
+            let goal = self.current_goal().ok_or("No goals remaining")?;
             target = goal.target.clone();
             lctx = goal.lctx.clone();
+            goal_mvar = goal.mvar.clone();
+            goal_kind = goal.kind;
         }
 
         // WHNF the target to expose Pi
@@ -232,24 +314,31 @@ impl<'a> TacticEngine<'a> {
         match &target_whnf {
             Expr::Pi(_, _, dom, body) => {
                 let user_name = Name::new(name);
-                let decl_index = {
-                    let goal = self.current_goal_mut().ok_or("No goals remaining")?;
-                    let decl = goal.lctx.mk_local_decl(user_name.clone(), user_name.clone(), (**dom).clone(), BinderInfo::Default);
-                    let unique_name = decl.get_name().clone();
-                    let fvar = Expr::mk_fvar(unique_name.clone());
-                    let idx = decl.get_index();
-                    goal.target = body.instantiate(&fvar);
-                    idx
-                };
-                let goal = self.current_goal().ok_or("No goals remaining")?;
-                let decl = goal.lctx.find_local_decl(&user_name).ok_or("Introduced decl not found")?;
+                let mut new_lctx = lctx.clone();
+                let decl = new_lctx.mk_local_decl(user_name.clone(), user_name.clone(), (**dom).clone(), BinderInfo::Default);
                 let unique_name = decl.get_name().clone();
+                let fvar = Expr::mk_fvar(unique_name.clone());
+                let idx = decl.get_index();
+                let new_target = body.instantiate(&fvar);
 
-                // If this intro corresponds to a theorem parameter, record its index
+                // Remove old goal and push new goal with updated target
+                self.pop_goal();
+                let new_mvar_name = self.push_goal(new_target, new_lctx, goal_kind);
+
+                // Assign old mvar to lambda abstracting the introduced variable
+                let proof = Expr::Lambda(
+                    user_name.clone(),
+                    BinderInfo::Default,
+                    Rc::new((**dom).clone()),
+                    Rc::new(Expr::mk_mvar(new_mvar_name)),
+                );
+                self.assign_mvar(&goal_mvar, proof, &lctx);
+
+                // Track introduced variable
                 if self.introduced_vars.len() < self.num_params {
-                    self.param_decl_indices.insert(decl_index);
+                    self.param_decl_indices.insert(idx);
                 }
-                self.introduced_vars.push((decl_index, user_name, unique_name, (**dom).clone()));
+                self.introduced_vars.push((idx, user_name, unique_name, (**dom).clone()));
                 Ok(())
             }
             _ => Err(format!("tactic_intro: target is not a Pi type: {}", format_expr(&target_whnf))),
@@ -604,6 +693,70 @@ impl<'a> TacticEngine<'a> {
 
         let goal = self.current_goal_mut().ok_or("No goals remaining")?;
         goal.lctx.mk_let_decl(Name::new(name), Name::new(name), ty.clone(), proof.clone());
+        Ok(())
+    }
+
+    /// Provide a witness for an existential goal (Exists A P)
+    pub fn tactic_exists(&mut self, witness: &Expr) -> Result<(), String> {
+        let goal = self.pop_goal().ok_or("No goals remaining")?;
+        let target = goal.target.clone();
+
+        // Check if target is Exists A P
+        let (head, args) = target.get_app_args();
+        let head = head.ok_or("exists tactic: goal is not an application")?;
+
+        if let Expr::Const(name, _) = head {
+            if name.to_string() != "Exists" {
+                return Err(format!(
+                    "exists tactic: goal is not an Exists type, got {}",
+                    name.to_string()
+                ));
+            }
+        } else {
+            return Err("exists tactic: goal is not an Exists type".to_string());
+        }
+
+        if args.len() != 2 {
+            return Err(format!(
+                "exists tactic: unexpected number of arguments to Exists: {}",
+                args.len()
+            ));
+        }
+
+        let a = args[0].clone();
+        let p = args[1].clone();
+
+        // Infer witness type
+        let mut tc = TypeChecker::with_local_ctx(self.st, goal.lctx.clone());
+        let witness_ty = tc
+            .infer(witness)
+            .map_err(|e| format!("exists tactic: cannot infer witness type: {}", e))?;
+
+        // Check witness type matches A
+        if !tc.is_def_eq(&witness_ty, &a) {
+            return Err(format!(
+                "exists tactic: witness type {} does not match expected type {}",
+                format_expr(&witness_ty),
+                format_expr(&a)
+            ));
+        }
+
+        // Compute P w
+        let pw = Expr::mk_app(p.clone(), witness.clone());
+
+        // Create subgoal for P w
+        let subgoal_mvar_name = self.push_goal(pw, goal.lctx.clone(), GoalKind::Proof);
+        let subgoal_mvar = Expr::mk_mvar(subgoal_mvar_name);
+
+        // Build proof term: Exists.intro A P witness proof
+        let mut proof = Expr::mk_const(Name::new("Exists").extend("intro"), vec![]);
+        proof = Expr::mk_app(proof, a);
+        proof = Expr::mk_app(proof, p);
+        proof = Expr::mk_app(proof, witness.clone());
+        proof = Expr::mk_app(proof, subgoal_mvar);
+
+        self.assign_mvar(&goal.mvar, proof, &goal.lctx);
+
         Ok(())
     }
 

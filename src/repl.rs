@@ -256,6 +256,10 @@ impl Repl {
                 println!("Error reading input.");
                 continue;
             }
+            // EOF reached, exit cleanly
+            if input.is_empty() {
+                break;
+            }
 
             let input = input.trim();
             if input.is_empty() {
@@ -917,52 +921,7 @@ impl Repl {
         // Embed params into value as lambdas
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if is_tactic {
-            // Variables introduced via tactic_intro are tracked in introduced_vars.
-            // For theorems with forall in the return type (rather than in params),
-            // num_params may undercount. Compute total params from ret_ty Pi depth.
-            let total_params = if let Some(ref rt) = ret_ty {
-                let rt_expr = rt.to_expr(&self.env_bindings, &self.env, &mut bound_vars.clone());
-                let mut count = param_exprs.len();
-                let mut e = rt_expr;
-                while let Expr::Pi(_, _, _, body) = e {
-                    count += 1;
-                    e = (*body).clone();
-                }
-                count
-            } else {
-                param_exprs.len()
-            };
-            // Non-param hypotheses first (in reverse order): only abstract if still
-            // free in the proof term. Subgoal parameters (e.g., induction minor
-            // premises) have already been abstracted by tactic_exact/tactic_rfl.
-            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
-                if idx < total_params {
-                    continue; // theorem params handled below
-                }
-                if final_value.contains_fvar(unique_name) {
-                    final_value = final_value.abstract_fvar(unique_name, 0);
-                    final_value = Expr::Lambda(
-                        user_name.clone(),
-                        BinderInfo::Default,
-                        Rc::new(ty.clone()),
-                        Rc::new(final_value),
-                    );
-                }
-            }
-            // Theorem parameters (in reverse order): always wrap with lambdas.
-            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
-                if idx < total_params {
-                    final_value = final_value.abstract_fvar(unique_name, 0);
-                    final_value = Expr::Lambda(
-                        user_name.clone(),
-                        BinderInfo::Default,
-                        Rc::new(ty.clone()),
-                        Rc::new(final_value),
-                    );
-                }
-            }
-        } else {
+        if !is_tactic {
             for (pname, pty) in param_exprs.iter().rev() {
                 // The parser already converts parameter names to BVars via bound_vars,
                 // so we just wrap with lambdas directly. Calling abstract_fvar here
@@ -1115,47 +1074,7 @@ impl Repl {
         // Embed params into value as lambdas
         let mut final_value = value_expr;
         let is_tactic = matches!(&value, ParsedExpr::TacticBlock(_));
-        if is_tactic {
-            // For solve with forall in the return type, compute total params from ret_ty Pi depth.
-            let total_params = {
-                let rt_expr = ret_ty_expr.clone();
-                let mut count = param_exprs.len();
-                let mut e = rt_expr;
-                while let Expr::Pi(_, _, _, body) = e {
-                    count += 1;
-                    e = (*body).clone();
-                }
-                count
-            };
-            // Non-param hypotheses first (in reverse order): only abstract if still
-            // free in the proof term.
-            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
-                if idx < total_params {
-                    continue; // solve params handled below
-                }
-                if final_value.contains_fvar(unique_name) {
-                    final_value = final_value.abstract_fvar(unique_name, 0);
-                    final_value = Expr::Lambda(
-                        user_name.clone(),
-                        BinderInfo::Default,
-                        Rc::new(ty.clone()),
-                        Rc::new(final_value),
-                    );
-                }
-            }
-            // Solve parameters (in reverse order): always wrap with lambdas.
-            for (idx, (_decl_idx, user_name, unique_name, ty)) in introduced_vars.iter().enumerate().rev() {
-                if idx < total_params {
-                    final_value = final_value.abstract_fvar(unique_name, 0);
-                    final_value = Expr::Lambda(
-                        user_name.clone(),
-                        BinderInfo::Default,
-                        Rc::new(ty.clone()),
-                        Rc::new(final_value),
-                    );
-                }
-            }
-        } else {
+        if !is_tactic {
             for (pname, pty) in param_exprs.iter().rev() {
                 // The parser already converts parameter names to BVars via bound_vars,
                 // so we just wrap with lambdas directly. Calling abstract_fvar here
@@ -1774,6 +1693,14 @@ pub fn execute_tactic(
                 Expr::mk_fvar(user_name)
             };
             engine.tactic_induction(&var_expr)
+        }
+        "exists" => {
+            if rest.is_empty() {
+                return Err("exists requires a witness expression".to_string());
+            }
+            let expr = parse_tactic_expr(env_bindings, env, infix_ops, notations, rest)?;
+            let expr = resolve_tactic_vars(&expr, engine);
+            engine.tactic_exists(&expr)
         }
         "have" => {
             if rest.is_empty() {
