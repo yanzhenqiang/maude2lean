@@ -1,4 +1,4 @@
-import logic
+import Logic
 import Exists
 import Eq
 

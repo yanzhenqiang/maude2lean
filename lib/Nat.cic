@@ -19,7 +19,6 @@ def nat_sub (m : Nat) (n : Nat) : Nat :=
 def nat_mul (m : Nat) (n : Nat) : Nat :=
   rec.Nat (fun _ => Nat) zero (\m' : Nat . \ih : Nat . nat_add ih n) m
 
--- Aliases for infix operators
 def add := nat_add
 def sub := nat_sub
 def mul := nat_mul

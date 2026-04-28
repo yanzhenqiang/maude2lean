@@ -312,12 +312,29 @@ impl ParsedExpr {
             }
 
             // Bind pattern variables
+            let _external_bound_count = bound_vars.len();
             for var in &vars {
                 bound_vars.push(var.clone());
             }
-            let body_expr = branch.1.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
+            let mut body_expr = branch.1.to_expr_with_fn(env_bindings, env, bound_vars, recursive_fn);
             for _ in &vars {
                 bound_vars.pop();
+            }
+
+            let num_ih = param_types.iter().filter(|pt| expr_contains_const(pt, &induct_name)).count();
+            let total_lambdas = vars.len() + num_ih;
+
+            // Lift all BVars to make room for the lambda wrappers we are about to add.
+            body_expr = body_expr.lift_loose_bvars(total_lambdas as u64, 0);
+
+            // Replace pattern-variable BVars (which now point past the lambdas) with references
+            // to the corresponding lambda parameters.
+            for (i, _var) in vars.iter().enumerate() {
+                // The variable's de Bruijn index before lifting is (vars.len() - 1 - i).
+                // After lifting by total_lambdas, its index becomes:
+                let old_idx = (vars.len() - 1 - i) as u64 + total_lambdas as u64;
+                let new_idx = (num_ih + vars.len() - 1 - i) as u64;
+                body_expr = replace_bvar(&body_expr, old_idx, new_idx, 0);
             }
 
             let mut minor = body_expr;
@@ -328,7 +345,6 @@ impl ParsedExpr {
             for param_ty in param_types.iter().rev() {
                 if expr_contains_const(param_ty, &induct_name) {
                     let ih_ty = motive_expr.clone();
-                    minor = minor.lift_loose_bvars(1, 0);
                     minor = Expr::Lambda(Name::new("ih"), BinderInfo::Default, Rc::new(ih_ty), Rc::new(minor));
                 }
             }
@@ -429,14 +445,55 @@ fn rebuild_app(head: Expr, args: Vec<Expr>) -> Expr {
     result
 }
 
+/// Replace all occurrences of a specific BVar index with another, respecting binder depth.
+fn replace_bvar(expr: &Expr, from: u64, to: u64, depth: u64) -> Expr {
+    match expr {
+        Expr::BVar(i) => {
+            if *i == from + depth {
+                Expr::mk_bvar(to + depth)
+            } else {
+                expr.clone()
+            }
+        }
+        Expr::App(f, a) => Expr::App(
+            Rc::new(replace_bvar(f, from, to, depth)),
+            Rc::new(replace_bvar(a, from, to, depth)),
+        ),
+        Expr::Lambda(name, bi, ty, body) => Expr::Lambda(
+            name.clone(),
+            *bi,
+            Rc::new(replace_bvar(ty, from, to, depth)),
+            Rc::new(replace_bvar(body, from, to, depth + 1)),
+        ),
+        Expr::Pi(name, bi, ty, body) => Expr::Pi(
+            name.clone(),
+            *bi,
+            Rc::new(replace_bvar(ty, from, to, depth)),
+            Rc::new(replace_bvar(body, from, to, depth + 1)),
+        ),
+        Expr::Let(name, ty, value, body, nondep) => Expr::Let(
+            name.clone(),
+            Rc::new(replace_bvar(ty, from, to, depth)),
+            Rc::new(replace_bvar(value, from, to, depth)),
+            Rc::new(replace_bvar(body, from, to, depth + 1)),
+            *nondep,
+        ),
+        Expr::MData(d, e) => Expr::MData(d.clone(), Rc::new(replace_bvar(e, from, to, depth))),
+        Expr::Proj(s, i, e) => Expr::Proj(s.clone(), *i, Rc::new(replace_bvar(e, from, to, depth))),
+        _ => expr.clone(),
+    }
+}
+
 /// Replace recursive function calls with ih variables in a minor premise.
 /// `recursive_pairs` is a list of (pattern_bvar, ih_bvar) for each recursive field.
 /// The minor premise includes the lambda wrappers for pattern variables and ih.
+/// BVar indices in the minor body are already correct (pattern variables reference
+/// their lambda parameters), so no depth offset is needed.
 fn replace_recursive_calls(expr: &Expr, fn_name: &str, recursive_pairs: &[(u64, u64)]) -> Expr {
-    replace_recursive_calls_core(expr, fn_name, recursive_pairs, 0)
+    replace_recursive_calls_core(expr, fn_name, recursive_pairs)
 }
 
-fn replace_recursive_calls_core(expr: &Expr, fn_name: &str, recursive_pairs: &[(u64, u64)], depth: u64) -> Expr {
+fn replace_recursive_calls_core(expr: &Expr, fn_name: &str, recursive_pairs: &[(u64, u64)]) -> Expr {
     match expr {
         Expr::App(_, _) => {
             let (head, args) = flatten_app(expr);
@@ -445,17 +502,17 @@ fn replace_recursive_calls_core(expr: &Expr, fn_name: &str, recursive_pairs: &[(
                     for arg in &args {
                         if let Expr::BVar(bv) = arg {
                             for (pattern_bvar, ih_bvar) in recursive_pairs {
-                                if *bv == *pattern_bvar + depth {
-                                    return Expr::mk_bvar(*ih_bvar + depth);
+                                if *bv == *pattern_bvar {
+                                    return Expr::mk_bvar(*ih_bvar);
                                 }
                             }
                         }
                     }
                 }
             }
-            let new_head = replace_recursive_calls_core(head, fn_name, recursive_pairs, depth);
+            let new_head = replace_recursive_calls_core(head, fn_name, recursive_pairs);
             let new_args: Vec<Expr> = args.iter()
-                .map(|a| replace_recursive_calls_core(a, fn_name, recursive_pairs, depth))
+                .map(|a| replace_recursive_calls_core(a, fn_name, recursive_pairs))
                 .collect();
             rebuild_app(new_head, new_args)
         }
@@ -463,32 +520,32 @@ fn replace_recursive_calls_core(expr: &Expr, fn_name: &str, recursive_pairs: &[(
             Expr::Lambda(
                 name.clone(),
                 *bi,
-                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
-                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs)),
             )
         }
         Expr::Pi(name, bi, ty, body) => {
             Expr::Pi(
                 name.clone(),
                 *bi,
-                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
-                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs)),
             )
         }
         Expr::Let(name, ty, value, body, nondep) => {
             Expr::Let(
                 name.clone(),
-                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs, depth)),
-                Rc::new(replace_recursive_calls_core(value, fn_name, recursive_pairs, depth)),
-                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs, depth + 1)),
+                Rc::new(replace_recursive_calls_core(ty, fn_name, recursive_pairs)),
+                Rc::new(replace_recursive_calls_core(value, fn_name, recursive_pairs)),
+                Rc::new(replace_recursive_calls_core(body, fn_name, recursive_pairs)),
                 *nondep,
             )
         }
         Expr::MData(d, e) => {
-            Expr::MData(d.clone(), Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs, depth)))
+            Expr::MData(d.clone(), Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs)))
         }
         Expr::Proj(s, i, e) => {
-            Expr::Proj(s.clone(), *i, Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs, depth)))
+            Expr::Proj(s.clone(), *i, Rc::new(replace_recursive_calls_core(e, fn_name, recursive_pairs)))
         }
         _ => expr.clone(),
     }

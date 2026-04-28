@@ -455,10 +455,14 @@ impl<'a> TacticEngine<'a> {
         let b = eq_args[2].clone();
 
         if !tc.is_def_eq(&a, &b) {
+            let a_whnf = tc.whnf(&a);
+            let b_whnf = tc.whnf(&b);
             return Err(format!(
-                "tactic_refl: terms are not definitionally equal: {} != {}",
+                "tactic_refl: terms are not definitionally equal: {} != {}\n  whnf: {} != {}",
                 format_expr(&a),
-                format_expr(&b)
+                format_expr(&b),
+                format_expr(&a_whnf),
+                format_expr(&b_whnf)
             ));
         }
 
