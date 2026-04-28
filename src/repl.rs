@@ -152,6 +152,10 @@ impl Repl {
         self.quiet = quiet;
     }
 
+    pub fn env(&self) -> &Environment {
+        &self.env
+    }
+
     /// Generate an auxiliary inductive type for a nested occurrence.
     /// Given `App(App(Const(C), arg1), arg2)` where one arg is the inductive type,
     /// creates an inductive that mirrors `C` but with the inductive type fixed.
