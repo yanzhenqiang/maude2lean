@@ -1,0 +1,67 @@
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point O; Point R; Point P; Point Q; Point M; Point A; Point B
+where OnCircle(A, O, R); Between(A, M, B); OnCircle(B, O, R) {
+    override O.x = 51.3392
+    override O.y = -4.1415
+    override R.x = 50.1162
+    override R.y = -54.1389
+    override P.x = 64.5676
+    override P.y = 44.0897
+    override Q.x = 12.0739
+    override Q.y = -35.1169
+    override M.x = 38.3208
+    override M.y = 4.4864
+}
+
+forall Point o; Point r; Point p where OnCircle(p, o, r) {
+    o.circ = Circle {
+        center: o.icon.center
+        r: ?
+        fillColor: rgba(0, 0, 0, 0.0)
+        strokeColor: rgba(0.3, 0.3, 0.3, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal(o.circ.r * o.circ.r, (r.x - o.x) * (r.x - o.x) + (r.y - o.y) * (r.y - o.y))
+    ensure equal((p.x - o.x) * (p.x - o.x) + (p.y - o.y) * (p.y - o.y), o.circ.r * o.circ.r)
+    ensure greaterThan(o.circ.r, 50.0)
+}
+
+forall Point a; Point b; Point c where Between(a, b, c) {
+    seg = Line {
+        start: a.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.y - c.y), (a.x - c.x) * (a.y - b.y))
+    ensure disjoint(a.icon, b.icon, 10)
+    ensure disjoint(b.icon, c.icon, 10)
+}

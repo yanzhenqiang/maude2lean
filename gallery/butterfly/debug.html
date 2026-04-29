@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Butterfly Theorem - Step by Step</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; background: #f5f5f5; }
+    h1 { text-align: center; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 20px; }
+    .card { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
+    .card-header { background: #333; color: white; padding: 10px 16px; font-weight: bold; }
+    .card-body { padding: 16px; text-align: center; }
+    .card-body img { max-width: 100%; height: auto; }
+    .constraints { font-size: 12px; color: #666; margin-top: 8px; text-align: left; white-space: pre-wrap; }
+    .back { text-align: center; margin-bottom: 20px; }
+    .back a { color: #333; }
+  </style>
+</head>
+<body>
+  <div class="back"><a href="../index.html">← Back to Gallery</a></div>
+  <h1>Butterfly Theorem — Constraint by Constraint</h1>
+  <div class="grid">
+    <div class='card'>
+      <div class='card-header'>Step 1</div>
+      <div class='card-body'>
+        <img src='./butterfly-1.svg' alt='Step 1'>
+        <div class='constraints'>
+OnCircle(P, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 2</div>
+      <div class='card-body'>
+        <img src='./butterfly-2.svg' alt='Step 2'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 3</div>
+      <div class='card-body'>
+        <img src='./butterfly-3.svg' alt='Step 3'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 4</div>
+      <div class='card-body'>
+        <img src='./butterfly-4.svg' alt='Step 4'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 5</div>
+      <div class='card-body'>
+        <img src='./butterfly-5.svg' alt='Step 5'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 6</div>
+      <div class='card-body'>
+        <img src='./butterfly-6.svg' alt='Step 6'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 7</div>
+      <div class='card-body'>
+        <img src='./butterfly-7.svg' alt='Step 7'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 8</div>
+      <div class='card-body'>
+        <img src='./butterfly-8.svg' alt='Step 8'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 9</div>
+      <div class='card-body'>
+        <img src='./butterfly-9.svg' alt='Step 9'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 10</div>
+      <div class='card-body'>
+        <img src='./butterfly-10.svg' alt='Step 10'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)
+Collinear(X, P, Q)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 11</div>
+      <div class='card-body'>
+        <img src='./butterfly-11.svg' alt='Step 11'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)
+Collinear(X, P, Q)
+Collinear(X, A, D)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 12</div>
+      <div class='card-body'>
+        <img src='./butterfly-12.svg' alt='Step 12'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)
+Collinear(X, P, Q)
+Collinear(X, A, D)
+Collinear(Y, P, Q)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Step 13</div>
+      <div class='card-body'>
+        <img src='./butterfly-13.svg' alt='Step 13'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)
+Collinear(X, P, Q)
+Collinear(X, A, D)
+Collinear(Y, P, Q)
+Collinear(Y, B, C)</div>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-header'>Final (with Goal)</div>
+      <div class='card-body'>
+        <img src='./butterfly-final.svg' alt='Final'>
+        <div class='constraints'>
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+OnCircle(A, O, R)
+OnCircle(B, O, R)
+OnCircle(C, O, R)
+OnCircle(D, O, R)
+Midpoint(M, P, Q)
+Between(A, M, B)
+Between(C, M, D)
+Collinear(X, P, Q)
+Collinear(X, A, D)
+Collinear(Y, P, Q)
+Collinear(Y, B, C)
+
+-- Prove:
+Goal_Midpoint(M, X, Y)</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

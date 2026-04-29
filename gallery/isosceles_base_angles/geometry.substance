@@ -1,0 +1,10 @@
+-- Theorem: isosceles_base_angles
+Point A
+Point B
+Point C
+
+-- Given:
+Isosceles(A, B, C)
+
+-- Prove:
+Goal_AngleCongruent(A, B, C, A, C, B)

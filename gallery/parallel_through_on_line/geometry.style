@@ -1,0 +1,457 @@
+-- Penrose Style for Euclidean Geometry
+-- Auto-generated from CIC geometry declarations
+
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point p; Line l where OnLine(p, l) {
+    ensure near(p.icon.center, l.icon.start)
+    ensure near(p.icon.center, l.icon.end)
+}
+
+forall Point p; Line l where Goal_OnLine(p, l) {
+}
+
+forall Point a; Point b; Point c where Between(a, b, c) {
+    seg = Line {
+        start: a.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.y - c.y), (a.x - c.x) * (a.y - b.y))
+    ensure disjoint(a.icon, b.icon, 10)
+    ensure disjoint(b.icon, c.icon, 10)
+}
+
+forall Point a; Point b; Point c where Goal_Between(a, b, c) {
+    seg = Line {
+        start: a.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point m; Point a; Point b where Midpoint(m, a, b) {
+    seg = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    override m.x = (a.x + b.x) / 2.0
+    override m.y = (a.y + b.y) / 2.0
+    ensure disjoint(a.icon, b.icon, 10)
+}
+
+forall Point m; Point a; Point b where Goal_Midpoint(m, a, b) {
+    seg = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Line l; Line m where Parallel(l, m) {
+    ensure disjoint(l.icon, m.icon, 20)
+}
+
+forall Line l; Line m where Goal_Parallel(l, m) {
+}
+
+forall Line l; Line m where Perpendicular(l, m) {
+    ensure equal(l.icon.start[0], m.icon.start[0])
+    ensure equal(l.icon.end[1], m.icon.end[1])
+}
+
+forall Line l; Line m where Goal_Perpendicular(l, m) {
+}
+
+forall Point a; Point b; Point c where Triangle(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure disjoint(a.icon, b.icon, 15)
+    ensure disjoint(b.icon, c.icon, 15)
+    ensure disjoint(c.icon, a.icon, 15)
+}
+
+forall Point a; Point b; Point c where Goal_Triangle(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c where Isosceles(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y), (a.x - c.x) * (a.x - c.x) + (a.y - c.y) * (a.y - c.y))
+    ensure disjoint(a.icon, b.icon, 15)
+    ensure disjoint(a.icon, c.icon, 15)
+    ensure disjoint(b.icon, c.icon, 15)
+}
+
+forall Point a; Point b; Point c where Goal_Isosceles(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c where Equilateral(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y), (b.x - c.x) * (b.x - c.x) + (b.y - c.y) * (b.y - c.y))
+    ensure equal((b.x - c.x) * (b.x - c.x) + (b.y - c.y) * (b.y - c.y), (c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y))
+    ensure disjoint(a.icon, b.icon, 15)
+    ensure disjoint(b.icon, c.icon, 15)
+    ensure disjoint(c.icon, a.icon, 15)
+}
+
+forall Point a; Point b; Point c where Goal_Equilateral(a, b, c) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ca = Line {
+        start: c.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c where Collinear(a, b, c) {
+    seg = Line {
+        start: (b.x, b.y)
+        end: (c.x, c.y)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.y - c.y), (a.x - c.x) * (a.y - b.y))
+    ensure disjoint(b.icon, c.icon, 10)
+}
+
+forall Point a; Point b; Point c where Goal_Collinear(a, b, c) {
+    seg = Line {
+        start: (b.x, b.y)
+        end: (c.x, c.y)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c; Point d where SegCongruent(a, b, c, d) {
+    s1 = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    s2 = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y), (c.x - d.x) * (c.x - d.x) + (c.y - d.y) * (c.y - d.y))
+}
+
+forall Point a; Point b; Point c; Point d where Goal_SegCongruent(a, b, c, d) {
+    s1 = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    s2 = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c where RightAngle(a, b, c) {
+    ba = Line {
+        start: b.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (c.x - b.x) + (a.y - b.y) * (c.y - b.y), 0.0)
+}
+
+forall Point a; Point b; Point c where Goal_RightAngle(a, b, c) {
+    ba = Line {
+        start: b.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c; Point d where Rectangle(a, b, c, d) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    cd = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    da = Line {
+        start: d.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure disjoint(a.icon, b.icon, 15)
+    ensure disjoint(b.icon, c.icon, 15)
+    ensure disjoint(c.icon, d.icon, 15)
+    ensure disjoint(d.icon, a.icon, 15)
+}
+
+forall Point a; Point b; Point c; Point d where Goal_Rectangle(a, b, c, d) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    cd = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    da = Line {
+        start: d.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point a; Point b; Point c; Point d where Parallelogram(a, b, c, d) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    cd = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    da = Line {
+        start: d.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure disjoint(a.icon, b.icon, 15)
+    ensure disjoint(b.icon, c.icon, 15)
+    ensure disjoint(c.icon, d.icon, 15)
+    ensure disjoint(d.icon, a.icon, 15)
+}
+
+forall Point a; Point b; Point c; Point d where Goal_Parallelogram(a, b, c, d) {
+    ab = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    bc = Line {
+        start: b.icon.center
+        end: c.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    cd = Line {
+        start: c.icon.center
+        end: d.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    da = Line {
+        start: d.icon.center
+        end: a.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}
+
+forall Point o; Point r; Point p where OnCircle(p, o, r) {
+    o.circ = Circle {
+        center: o.icon.center
+        r: ?
+        fillColor: rgba(0, 0, 0, 0.0)
+        strokeColor: rgba(0.3, 0.3, 0.3, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal(o.circ.r * o.circ.r, (r.x - o.x) * (r.x - o.x) + (r.y - o.y) * (r.y - o.y))
+    ensure equal((p.x - o.x) * (p.x - o.x) + (p.y - o.y) * (p.y - o.y), o.circ.r * o.circ.r)
+    ensure greaterThan(o.circ.r, 5.0)
+    ensure disjoint(p.icon, o.icon, 8)
+}
+
+forall Point o; Point r; Point p where Goal_OnCircle(p, o, r) {
+    o.circ = Circle {
+        center: o.icon.center
+        r: ?
+        fillColor: rgba(0, 0, 0, 0.0)
+        strokeColor: rgba(0.3, 0.3, 0.3, 1.0)
+        strokeWidth: 1
+    }
+}
+

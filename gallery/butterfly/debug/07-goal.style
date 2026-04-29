@@ -1,0 +1,61 @@
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point O; Point R; Point P; Point Q; Point M; Point A; Point B; Point C; Point D; Point X; Point Y
+where Goal_Midpoint(M, X, Y) {
+    override O.x = 62.5592
+    override O.y = 23.4458
+    override R.x = -1.0189
+    override R.y = 144.7282
+    override P.x = 67.2619
+    override P.y = 160.3015
+    override Q.x = -71.5394
+    override Q.y = 51.1794
+    override M.x = -2.1388
+    override M.y = 105.7405
+    override A.x = -26.6626
+    override A.y = -80.4343
+    override B.x = 3.2812
+    override B.y = 146.8869
+    override C.x = -72.0992
+    override C.y = -1.4146
+    override D.x = 31.1511
+    override D.y = 156.7291
+    override X.x = 23.6671
+    override X.y = 126.0284
+}
+
+forall Point m; Point a; Point b where Goal_Midpoint(m, a, b) {
+    seg = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+}

@@ -1,0 +1,9 @@
+-- Theorem: parallel_sym
+Line l
+Line m
+
+-- Given:
+Parallel(l, m)
+
+-- Prove:
+Goal_Parallel(m, l)

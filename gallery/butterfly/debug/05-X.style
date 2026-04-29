@@ -1,0 +1,60 @@
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point O; Point R; Point P; Point Q; Point M; Point A; Point B; Point C; Point D; Point X
+where Collinear(X, P, Q); Collinear(X, A, D) {
+    override O.x = 51.3392
+    override O.y = -4.1415
+    override R.x = 50.1162
+    override R.y = -54.1389
+    override P.x = 64.5676
+    override P.y = 44.0897
+    override Q.x = 12.0739
+    override Q.y = -35.1169
+    override M.x = 38.3208
+    override M.y = 4.4864
+    override A.x = 74.7907
+    override A.y = -48.3033
+    override B.x = 74.7907
+    override B.y = -48.3033
+    override C.x = 77.9773
+    override C.y = 38.1746
+    override D.x = 5.2731
+    override D.y = -23.5876
+}
+
+forall Point a; Point b; Point c where Collinear(a, b, c) {
+    seg = Line {
+        start: (b.x, b.y)
+        end: (c.x, c.y)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal((a.x - b.x) * (a.y - c.y), (a.x - c.x) * (a.y - b.y))
+}

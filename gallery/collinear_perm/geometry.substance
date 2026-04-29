@@ -1,0 +1,10 @@
+-- Theorem: collinear_perm
+Point A
+Point B
+Point C
+
+-- Given:
+Collinear(A, B, C)
+
+-- Prove:
+Goal_Collinear(B, A, C)

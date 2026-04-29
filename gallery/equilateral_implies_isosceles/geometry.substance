@@ -1,0 +1,10 @@
+-- Theorem: equilateral_implies_isosceles
+Point A
+Point B
+Point C
+
+-- Given:
+Equilateral(A, B, C)
+
+-- Prove:
+Goal_Isosceles(A, B, C)

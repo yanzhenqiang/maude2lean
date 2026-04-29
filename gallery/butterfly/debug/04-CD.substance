@@ -1,0 +1,14 @@
+Point O
+Point R
+Point P
+Point Q
+Point M
+Point A
+Point B
+Point C
+Point D
+
+-- Given:
+OnCircle(C, O, R)
+Between(C, M, D)
+OnCircle(D, O, R)

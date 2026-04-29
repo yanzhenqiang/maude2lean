@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>CIC Geometry Theorem Viewer</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        h1 { text-align: center; margin-bottom: 10px; }
+        .selector { text-align: center; margin-bottom: 20px; }
+        select { font-size: 16px; padding: 8px 16px; border-radius: 4px; }
+        button { font-size: 14px; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+        #recompileBtn { background: #333; color: white; border: none; }
+        #recompileBtn:disabled { background: #999; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .panel { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; overflow: hidden; }
+        .panel-header { background: #333; color: white; padding: 10px 16px; font-weight: bold; font-size: 14px; }
+        .panel-body { padding: 16px; }
+        pre { margin: 0; font-family: "SF Mono", Monaco, monospace; font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre-wrap; }
+        code { color: #333; }
+        .svg-container { display: flex; justify-content: center; align-items: center; min-height: 300px; }
+        .svg-container img { max-width: 100%; height: auto; }
+        .hidden { display: none; }
+        .status { text-align: center; color: #666; font-size: 14px; margin-top: 8px; min-height: 20px; }
+    </style>
+</head>
+<body>
+    <h1>CIC Geometry → Penrose Diagram</h1>
+    <div class="selector">
+        <select id="theoremSelect">
+    <option value="between_implies_collinear">between_implies_collinear</option>
+    <option value="parallel_sym">parallel_sym</option>
+    <option value="parallel_through_on_line">parallel_through_on_line</option>
+    <option value="parallel_through_parallel">parallel_through_parallel</option>
+    <option value="collinear_perm">collinear_perm</option>
+    <option value="isosceles_base_angles">isosceles_base_angles</option>
+    <option value="collinear_perm2">collinear_perm2</option>
+    <option value="collinear_perm3">collinear_perm3</option>
+    <option value="equilateral_implies_isosceles">equilateral_implies_isosceles</option>
+    <option value="rectangle_is_parallelogram">rectangle_is_parallelogram</option>
+    <option value="butterfly" selected>butterfly</option>
+        </select>
+        <button id="resampleBtn">Resample</button>
+        <button id="recompileBtn">Resample All</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="content" class="container">
+        <div class="panel">
+            <div class="panel-header">CIC Declaration</div>
+            <div class="panel-body"><pre><code id="cicCode"></code></pre></div>
+        </div>
+        <div class="panel">
+            <div class="panel-header">Penrose Substance (Auto-generated)</div>
+            <div class="panel-body"><pre><code id="substanceCode"></code></pre></div>
+        </div>
+        <div class="panel">
+            <div class="panel-header">Penrose Rendering</div>
+            <div class="panel-body svg-container"><img id="svgImg" src="" alt="Penrose diagram"></div>
+        </div>
+    </div>
+    <script>
+        const THEOREMS = [{"name":"between_implies_collinear","decl":"theorem between_implies_collinear : forall (A : Point), forall (B : Point), forall (C : Point),\nbetween A B C -> collinear A B C","substance":"-- Theorem: between_implies_collinear\nPoint A\nPoint B\nPoint C\n\n-- Given:\nBetween(A, B, C)\n\n-- Prove:\nGoal_Collinear(A, B, C)\n","svgPath":"./between_implies_collinear/output.svg"},{"name":"parallel_sym","decl":"theorem parallel_sym : forall (l : Line), forall (m : Line),\nparallel l m -> parallel m l","substance":"-- Theorem: parallel_sym\nLine l\nLine m\n\n-- Given:\nParallel(l, m)\n\n-- Prove:\nGoal_Parallel(m, l)\n","svgPath":"./parallel_sym/output.svg"},{"name":"parallel_through_on_line","decl":"theorem parallel_through_on_line : forall (l : Line), forall (P : Point), forall (h : Not (on_line P l)),\non_line P (parallel_through l P h)","substance":"-- Theorem: parallel_through_on_line\nLine l\nPoint P\n","svgPath":"./parallel_through_on_line/output.svg"},{"name":"parallel_through_parallel","decl":"theorem parallel_through_parallel : forall (l : Line), forall (P : Point), forall (h : Not (on_line P l)),\nparallel l (parallel_through l P h)","substance":"-- Theorem: parallel_through_parallel\nLine l\nPoint P\n","svgPath":"./parallel_through_parallel/output.svg"},{"name":"collinear_perm","decl":"theorem collinear_perm : forall (A : Point), forall (B : Point), forall (C : Point),\ncollinear A B C -> collinear B A C","substance":"-- Theorem: collinear_perm\nPoint A\nPoint B\nPoint C\n\n-- Given:\nCollinear(A, B, C)\n\n-- Prove:\nGoal_Collinear(B, A, C)\n","svgPath":"./collinear_perm/output.svg"},{"name":"isosceles_base_angles","decl":"theorem isosceles_base_angles : forall (A B C : Point),\nisosceles A B C -> angle_congruent A B C A C B","substance":"-- Theorem: isosceles_base_angles\nPoint A\nPoint B\nPoint C\n\n-- Given:\nIsosceles(A, B, C)\n\n-- Prove:\nGoal_AngleCongruent(A, B, C, A, C, B)\n","svgPath":"./isosceles_base_angles/output.svg"},{"name":"collinear_perm2","decl":"theorem collinear_perm2 : forall (A : Point), forall (B : Point), forall (C : Point),\ncollinear A B C -> collinear A C B","substance":"-- Theorem: collinear_perm2\nPoint A\nPoint B\nPoint C\n\n-- Given:\nCollinear(A, B, C)\n\n-- Prove:\nGoal_Collinear(A, C, B)\n","svgPath":"./collinear_perm2/output.svg"},{"name":"collinear_perm3","decl":"theorem collinear_perm3 : forall (A : Point), forall (B : Point), forall (C : Point),\ncollinear A B C -> collinear C B A","substance":"-- Theorem: collinear_perm3\nPoint A\nPoint B\nPoint C\n\n-- Given:\nCollinear(A, B, C)\n\n-- Prove:\nGoal_Collinear(C, B, A)\n","svgPath":"./collinear_perm3/output.svg"},{"name":"equilateral_implies_isosceles","decl":"theorem equilateral_implies_isosceles : forall (A B C : Point),\nNot (Eq Point A B) -> Not (Eq Point B C) -> Not (Eq Point A C) ->\nequilateral A B C -> isosceles A B C","substance":"-- Theorem: equilateral_implies_isosceles\nPoint A\nPoint B\nPoint C\n\n-- Given:\nEquilateral(A, B, C)\n\n-- Prove:\nGoal_Isosceles(A, B, C)\n","svgPath":"./equilateral_implies_isosceles/output.svg"},{"name":"rectangle_is_parallelogram","decl":"theorem rectangle_is_parallelogram : forall (A B C D : Point),\nrectangle A B C D -> parallelogram A B C D","substance":"-- Theorem: rectangle_is_parallelogram\nPoint A\nPoint B\nPoint C\nPoint D\n\n-- Given:\nRectangle(A, B, C, D)\n\n-- Prove:\nGoal_Parallelogram(A, B, C, D)\n","svgPath":"./rectangle_is_parallelogram/output.svg"},{"name":"butterfly","decl":"theorem butterfly : forall (O R P Q M A B C D X Y : Point),\non_circle P O R -> on_circle Q O R ->\non_circle A O R -> on_circle B O R ->\non_circle C O R -> on_circle D O R ->\nmidpoint M P Q ->\nbetween A M B ->\nbetween C M D ->\ncollinear X P Q -> collinear X A D ->\ncollinear Y P Q -> collinear Y B C ->\nmidpoint M X Y","substance":"-- Theorem: butterfly\nPoint O\nPoint R\nPoint P\nPoint Q\nPoint M\nPoint A\nPoint B\nPoint C\nPoint D\nPoint X\nPoint Y\n\n-- Given:\nOnCircle(P, O, R)\nOnCircle(Q, O, R)\nOnCircle(A, O, R)\nOnCircle(B, O, R)\nOnCircle(C, O, R)\nOnCircle(D, O, R)\nMidpoint(M, P, Q)\nBetween(A, M, B)\nBetween(C, M, D)\nCollinear(X, P, Q)\nCollinear(X, A, D)\nCollinear(Y, P, Q)\nCollinear(Y, B, C)\n\n-- Prove:\nGoal_Midpoint(M, X, Y)\n","svgPath":"./butterfly/output.svg"}];
+        const select = document.getElementById('theoremSelect');
+        const content = document.getElementById('content');
+        const cicCode = document.getElementById('cicCode');
+        const substanceCode = document.getElementById('substanceCode');
+        const svgImg = document.getElementById('svgImg');
+        const resampleBtn = document.getElementById('resampleBtn');
+        const recompileBtn = document.getElementById('recompileBtn');
+        const statusEl = document.getElementById('status');
+
+        function loadTheorem(name, bustCache) {
+            const t = THEOREMS.find(x => x.name === name);
+            if (!t) return;
+            cicCode.textContent = t.decl;
+            substanceCode.textContent = t.substance;
+            svgImg.src = t.svgPath + (bustCache ? '?t=' + Date.now() : '');
+            content.classList.remove('hidden');
+        }
+
+        select.addEventListener('change', () => loadTheorem(select.value, true));
+
+        resampleBtn.addEventListener('click', async () => {
+            const name = select.value;
+            if (!name) return;
+            resampleBtn.disabled = true;
+            statusEl.textContent = 'Resampling ' + name + '...';
+            try {
+                const res = await fetch('/api/resample', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ theorem: name, variation: Date.now().toString() }),
+                });
+                const text = await res.text();
+                if (res.ok) {
+                    statusEl.textContent = 'Resample done.';
+                    loadTheorem(name, true);
+                    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+                } else {
+                    statusEl.textContent = 'Resample failed: ' + text;
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+            } finally {
+                resampleBtn.disabled = false;
+            }
+        });
+
+        recompileBtn.addEventListener('click', async () => {
+            recompileBtn.disabled = true;
+            statusEl.textContent = 'Resampling all theorems...';
+            try {
+                const res = await fetch('/api/recompile', { method: 'POST' });
+                const text = await res.text();
+                if (res.ok) {
+                    statusEl.textContent = 'Recompile done. Refreshing...';
+                    loadTheorem(select.value, true);
+                    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+                } else {
+                    statusEl.textContent = 'Recompile failed: ' + text;
+                }
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+            } finally {
+                recompileBtn.disabled = false;
+            }
+        });
+
+        loadTheorem('butterfly', true);
+    </script>
+</body>
+</html>

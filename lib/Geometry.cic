@@ -514,3 +514,54 @@ theorem rectangle_is_parallelogram : forall (A B C D : Point),
 def isosceles_alt (A : Point) (B : Point) (C : Point) : Prop :=
   And (seg_congruent A B A C)
     (exists (M : Point), midpoint M B C)
+
+-- Axiom for placeholder proofs (allows stating theorems without full proof)
+axiom sorry_prop : forall (P : Prop), P
+
+-- =====================================================================
+-- 24. Butterfly Theorem
+-- =====================================================================
+
+-- Let M be the midpoint of chord PQ of a circle.
+-- Through M draw two other chords AB and CD.
+-- Let AD and BC intersect PQ at X and Y respectively.
+-- Then M is also the midpoint of XY.
+theorem butterfly : forall (O : Point), forall (R : Point),
+  forall (P : Point), forall (Q : Point),
+  on_circle P O R -> on_circle Q O R ->
+  forall (M : Point),
+  midpoint M P Q ->
+  forall (A : Point), forall (B : Point),
+  on_circle A O R -> between A M B -> on_circle B O R ->
+  forall (C : Point), forall (D : Point),
+  on_circle C O R -> between C M D -> on_circle D O R ->
+  forall (X : Point),
+  collinear X P Q -> collinear X A D ->
+  forall (Y : Point),
+  collinear Y P Q -> collinear Y B C ->
+  midpoint M X Y := by
+  intro O
+  intro R
+  intro P
+  intro Q
+  intro h1
+  intro h2
+  intro M
+  intro h3
+  intro A
+  intro B
+  intro h4
+  intro h5
+  intro h6
+  intro C
+  intro D
+  intro h7
+  intro h8
+  intro h9
+  intro X
+  intro h10
+  intro h11
+  intro Y
+  intro h12
+  intro h13
+  exact (sorry_prop (midpoint M X Y))

@@ -28,15 +28,6 @@ fn main() {
             }
             run_tui(&args[2..]);
         }
-        "export-penrose" => {
-            if args.len() < 4 {
-                eprintln!("Usage: {} export-penrose <out-dir> <file1.cic> [file2.cic ...]", args[0]);
-                std::process::exit(1);
-            }
-            let out_dir = &args[2];
-            let theorem = std::env::var("PENROSE_THEOREM").ok();
-            run_export_penrose(out_dir, &args[3..], theorem.as_deref());
-        }
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             print_usage(&args[0]);
@@ -52,7 +43,7 @@ fn print_usage(prog: &str) {
     eprintln!("  repl                         Start interactive Lean REPL");
     eprintln!("  check-files <file>...        Batch check .cic files");
     eprintln!("  tui <target> [deps...]       Interactive TUI goal viewer");
-    eprintln!("  export-penrose <out-dir> <file>...  Export geometry to Penrose files");
+    eprintln!("");
 }
 
 fn run_repl() {
@@ -279,23 +270,3 @@ fn run_tui(args: &[String]) {
     }
 }
 
-fn run_export_penrose(out_dir: &str, files: &[String], theorem: Option<&str>) {
-    use std::path::Path;
-
-    let mut repl = tinycic::repl::Repl::new();
-    repl.set_quiet(true);
-
-    match repl.check_files(&files.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("Failed to load files: {}", e);
-            std::process::exit(1);
-        }
-    }
-
-    let env = repl.env();
-    if let Err(e) = tinycic::penrose::export_geometry(env, theorem, Path::new(out_dir)) {
-        eprintln!("Export failed: {}", e);
-        std::process::exit(1);
-    }
-}

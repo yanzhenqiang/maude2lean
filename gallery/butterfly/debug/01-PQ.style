@@ -1,0 +1,41 @@
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point o; Point r; Point p where OnCircle(p, o, r) {
+    o.circ = Circle {
+        center: o.icon.center
+        r: ?
+        fillColor: rgba(0, 0, 0, 0.0)
+        strokeColor: rgba(0.3, 0.3, 0.3, 1.0)
+        strokeWidth: 1
+    }
+    ensure equal(o.circ.r * o.circ.r, (r.x - o.x) * (r.x - o.x) + (r.y - o.y) * (r.y - o.y))
+    ensure equal((p.x - o.x) * (p.x - o.x) + (p.y - o.y) * (p.y - o.y), o.circ.r * o.circ.r)
+    ensure greaterThan(o.circ.r, 50.0)
+}

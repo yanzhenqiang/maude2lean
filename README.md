@@ -172,3 +172,63 @@ indexmap = "2.2"       # Ordered environment
 ```
 
 Both are minimal and actively maintained. `crossterm` is only used by `tui.rs`.
+
+---
+
+## Penrose Geometry Gallery (Web Pipeline)
+
+### Architecture
+
+```
+CIC theorem declaration
+    ↓
+web/cic-to-penrose.mjs  (parse + generate trio)
+    ↓
+Domain + Substance + Style  (per theorem)
+    ↓
+web/penrose-render.mjs  (@penrose/core → SVG)
+    ↓
+gallery/<theorem>/output.svg
+```
+
+### Core Principles
+
+1. **Constraints originate from CIC only** — All visual constraints are derived from the `.cic` file. No hand-written constraints are added beyond what the theorem declares.
+2. **Given = hard constraints, Prove = soft visualization** — Hypotheses map to Penrose `ensure` rules; the conclusion maps to `Goal_*` predicates that render shapes but omit `ensure` / `override`. This avoids over-constraint conflicts.
+3. **Never hard-code positions** — Use `ensure equal(m.x, (a.x + b.x) / 2.0)` instead of `override`. The optimizer discovers the layout.
+4. **Do not add artificial separation constraints** — If points overlap, use Penrose's **Resample** button rather than injecting manual `disjoint` constraints.
+5. **Discuss before extending** — Any change beyond the core "Given hard / Prove soft" pattern must be discussed with the user first.
+
+### Step-by-Step Debug Visualization (`web/debug-butterfly.mjs`)
+
+To debug complex geometry theorems like the Butterfly Theorem, we generate diagrams incrementally:
+
+1. **Declare only needed points per step** — Each step adds new points and constraints; previous points are kept but their constraints are removed.
+2. **Fix previous coordinates via override** — After a step renders, extract point coordinates from the SVG and carry them forward. In the next step's Style, use a **single comprehensive `forall ... where` block** to set all fixed coordinates via `override`.
+3. **Why one comprehensive block?** — In Penrose 3.3.0, multiple `forall Point <name>` blocks overwrite each other globally (the last block wins for all Point instances). The workaround is one block whose `where` clause matches the exact graph structure of the step, binding all variables simultaneously.
+4. **Optimize new points only** — Penrose solves only the new point coordinates, with old points anchored. This makes each step tractable and the construction order human-readable.
+
+Example workflow for Butterfly Theorem:
+```
+Step 1: P, Q on circle  → optimize P, Q, O, R
+Step 2: M = midpoint(P, Q)  → fix P, Q, O, R; optimize M
+Step 3: chord AB through M  → fix P, Q, O, R, M; optimize A, B
+Step 4: chord CD through M  → fix previous; optimize C, D
+Step 5: X = PQ ∩ AD       → fix previous; optimize X
+Step 6: Y = PQ ∩ BC       → fix previous; optimize Y
+Step 7: verify midpoint(M, X, Y)
+```
+
+### Usage
+
+```bash
+# Generate all geometry theorems
+node web/generate-all.mjs gallery lib/Geometry.cic
+
+# Step-by-step butterfly debug
+node web/debug-butterfly.mjs
+
+# Start gallery server
+node web/serve.mjs
+# open http://localhost:3000
+```

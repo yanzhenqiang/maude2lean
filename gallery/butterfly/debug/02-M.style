@@ -1,0 +1,52 @@
+canvas {
+    width = 400
+    height = 400
+}
+
+forall Point p {
+    p.x = ?
+    p.y = ?
+    p.icon = Circle {
+        center: (p.x, p.y)
+        r: 3
+        fillColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 0.0
+    }
+    p.tag = Text {
+        string: p.label
+        center: (p.x + 8, p.y - 8)
+    }
+}
+
+forall Line l {
+    l.icon = Line {
+        start: (?, ?)
+        end: (?, ?)
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1.5
+    }
+}
+
+forall Point O; Point R; Point P; Point Q; Point M
+where Midpoint(M, P, Q) {
+    override O.x = 51.3392
+    override O.y = -4.1415
+    override R.x = 50.1162
+    override R.y = -54.1389
+    override P.x = 64.5676
+    override P.y = 44.0897
+    override Q.x = 12.0739
+    override Q.y = -35.1169
+}
+
+forall Point m; Point a; Point b where Midpoint(m, a, b) {
+    seg = Line {
+        start: a.icon.center
+        end: b.icon.center
+        strokeColor: rgba(0, 0, 0, 1.0)
+        strokeWidth: 1
+    }
+    override m.x = (a.x + b.x) / 2.0
+    override m.y = (a.y + b.y) / 2.0
+    ensure disjoint(a.icon, b.icon, 10)
+}

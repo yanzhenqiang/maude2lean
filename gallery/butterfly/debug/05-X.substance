@@ -1,0 +1,14 @@
+Point O
+Point R
+Point P
+Point Q
+Point M
+Point A
+Point B
+Point C
+Point D
+Point X
+
+-- Given:
+Collinear(X, P, Q)
+Collinear(X, A, D)

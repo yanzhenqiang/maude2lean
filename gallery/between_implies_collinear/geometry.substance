@@ -1,0 +1,10 @@
+-- Theorem: between_implies_collinear
+Point A
+Point B
+Point C
+
+-- Given:
+Between(A, B, C)
+
+-- Prove:
+Goal_Collinear(A, B, C)

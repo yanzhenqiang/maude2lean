@@ -1,0 +1,18 @@
+-- Theorem: butterfly
+Point O
+Point R
+Point P
+Point Q
+
+-- Given:
+OnCircle(P, O, R)
+OnCircle(Q, O, R)
+Between(A, M, B)
+OnCircle(B, O, R)
+Between(C, M, D)
+OnCircle(D, O, R)
+Collinear(X, A, D)
+Collinear(Y, B, C)
+
+-- Prove:
+Goal_Midpoint(M, X, Y)

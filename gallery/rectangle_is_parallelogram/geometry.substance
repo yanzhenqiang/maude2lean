@@ -1,0 +1,11 @@
+-- Theorem: rectangle_is_parallelogram
+Point A
+Point B
+Point C
+Point D
+
+-- Given:
+Rectangle(A, B, C, D)
+
+-- Prove:
+Goal_Parallelogram(A, B, C, D)

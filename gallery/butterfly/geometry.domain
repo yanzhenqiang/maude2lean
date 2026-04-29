@@ -1,0 +1,38 @@
+-- Penrose Domain for Euclidean Geometry
+-- Auto-generated from CIC geometry declarations
+
+type Point
+type Line
+
+predicate OnLine(Point, Line)
+predicate Goal_OnLine(Point, Line)
+predicate Between(Point, Point, Point)
+predicate Goal_Between(Point, Point, Point)
+predicate SegCongruent(Point, Point, Point, Point)
+predicate Goal_SegCongruent(Point, Point, Point, Point)
+predicate AngleCongruent(Point, Point, Point, Point, Point, Point)
+predicate Goal_AngleCongruent(Point, Point, Point, Point, Point, Point)
+predicate Parallel(Line, Line)
+predicate Goal_Parallel(Line, Line)
+predicate Perpendicular(Line, Line)
+predicate Goal_Perpendicular(Line, Line)
+predicate Collinear(Point, Point, Point)
+predicate Goal_Collinear(Point, Point, Point)
+predicate Midpoint(Point, Point, Point)
+predicate Goal_Midpoint(Point, Point, Point)
+predicate RightAngle(Point, Point, Point)
+predicate Goal_RightAngle(Point, Point, Point)
+predicate Triangle(Point, Point, Point)
+predicate Goal_Triangle(Point, Point, Point)
+predicate OnCircle(Point, Point, Point)
+predicate Goal_OnCircle(Point, Point, Point)
+predicate Isosceles(Point, Point, Point)
+predicate Goal_Isosceles(Point, Point, Point)
+predicate Equilateral(Point, Point, Point)
+predicate Goal_Equilateral(Point, Point, Point)
+predicate Rectangle(Point, Point, Point, Point)
+predicate Goal_Rectangle(Point, Point, Point, Point)
+predicate Parallelogram(Point, Point, Point, Point)
+predicate Goal_Parallelogram(Point, Point, Point, Point)
+
+function MakeLine(Point, Point) -> Line
