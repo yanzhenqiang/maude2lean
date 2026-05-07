@@ -37,7 +37,7 @@
     .controls select:hover, .controls button:hover { background-color: #45475a; }
     .controls select { min-width: 200px; }
     .main-content { display: flex; height: calc(100vh - 50px); }
-    .code-panel { flex: 0 0 55%; border-right: 1px solid #313244; display: flex; flex-direction: column; }
+    .code-panel { display: flex; flex-direction: column; border-right: 1px solid #313244; }
     .info-panel { flex: 1; display: flex; flex-direction: column; }
     .panel-header {
       padding: 8px 15px;
@@ -90,6 +90,16 @@
     ::-webkit-scrollbar { width: 10px; }
     ::-webkit-scrollbar-track { background: #1e1e2e; }
     ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 5px; }
+    .resizer {
+      width: 5px;
+      background-color: #313244;
+      cursor: col-resize;
+      user-select: none;
+      transition: background-color 0.2s;
+    }
+    .resizer:hover {
+      background-color: #89b4fa;
+    }
   </style>
 </head>
 <body>
@@ -104,10 +114,11 @@
     </div>
   </div>
   <div class="main-content">
-    <div class="code-panel">
+    <div class="code-panel" id="code-panel">
       <div class="panel-header">Source</div>
       <div class="code-content" id="code-content"></div>
     </div>
+    <div class="resizer" id="resizer"></div>
     <div class="info-panel">
       <div class="panel-header">Goal / Penrose / Log</div>
       <div class="info-content" id="info-content">
@@ -147,6 +158,8 @@
     const logPanel = document.getElementById('log-panel');
     const statusBar = document.getElementById('status-bar');
     const fileSelector = document.getElementById('file-selector');
+    const resizer = document.getElementById('resizer');
+    const codePanel = document.getElementById('code-panel');
 
     function escapeHtml(text) {
       const div = document.createElement('div');
@@ -222,11 +235,18 @@
     }
 
     function renderPenrose() {
-      const isGeometry = state.availableFiles.find(f => f.toLowerCase().includes('geometry')) && 
-                         fileSelector.value.toLowerCase().includes('geometry');
+      const isGeometryFile = fileSelector.value.toLowerCase().includes('geometry');
       
-      if (!isGeometry) {
+      if (!isGeometryFile) {
         penrosePanel.innerHTML = '<div class="info-empty">Penrose visualization available for geometry files</div>';
+        return;
+      }
+      
+      const currentLine = state.fileContent[state.selectedLine] || '';
+      const isTheoremLine = currentLine.toLowerCase().includes('theorem');
+      
+      if (!isTheoremLine) {
+        penrosePanel.innerHTML = '<div class="info-empty">Select a theorem line to see Penrose visualization</div>';
         return;
       }
 
@@ -399,6 +419,34 @@
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
+    function initResizer() {
+      let isResizing = false;
+      
+      resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      });
+      
+      document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        const containerRect = document.querySelector('.main-content').getBoundingClientRect();
+        const newWidth = e.clientX - containerRect.left;
+        
+        if (newWidth > 200 && newWidth < containerRect.width - 200) {
+          codePanel.style.width = newWidth + 'px';
+          codePanel.style.flex = 'none';
+        }
+      });
+      
+      document.addEventListener('mouseup', () => {
+        isResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      });
+    }
+
     fileSelector.addEventListener('change', (e) => {
       const file = e.target.value;
       if (file) {
@@ -460,6 +508,7 @@
       }
       
       loadFile(target);
+      initResizer();
     });
   </script>
 </body>
