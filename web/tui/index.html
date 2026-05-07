@@ -535,16 +535,20 @@
         }
         case 'rectangle': {
           const labels=points.length>=4?points:['A','B','C','D'];
-          const w=80,h=60;
+          const w=90,h=60;
           const pts=[{x:cx-w,y:cy-h},{x:cx+w,y:cy-h},{x:cx+w,y:cy+h},{x:cx-w,y:cy+h}];
           svg+=`<polygon points="${pts.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          const offsets=[{ox:-12,oy:-10},{ox:12,oy:-10},{ox:12,oy:18},{ox:-12,oy:18}];
           pts.forEach((p,i)=>{
             svg+=`<circle cx="${p.x}" cy="${p.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
-            const ox=i%3===0?-12:8, oy=i<2?-8:18;
-            svg=autoLabel(svg,p.x,p.y,labels[i],ox,oy);
+            svg=autoLabel(svg,p.x,p.y,labels[i],offsets[i].ox,offsets[i].oy);
           });
-          // Right angle marker
-          svg+=`<polyline points="${pts[0].x+12},${pts[0].y} ${pts[0].x+12},${pts[0].y+12} ${pts[0].x},${pts[0].y+12}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          // Right angle markers at all four corners
+          const m=10;
+          svg+=`<polyline points="${pts[0].x+m},${pts[0].y} ${pts[0].x+m},${pts[0].y+m} ${pts[0].x},${pts[0].y+m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[1].x-m},${pts[1].y} ${pts[1].x-m},${pts[1].y+m} ${pts[1].x},${pts[1].y+m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[2].x-m},${pts[2].y} ${pts[2].x-m},${pts[2].y-m} ${pts[2].x},${pts[2].y-m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[3].x+m},${pts[3].y} ${pts[3].x+m},${pts[3].y-m} ${pts[3].x},${pts[3].y-m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
           break;
         }
         case 'angle': {
