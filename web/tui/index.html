@@ -317,268 +317,204 @@
       return { name, points, lineParams, geomType, declLine };
     }
 
-    // Simple constraint-based layout (simplified Penrose-style)
-    function solveLayout(elements, constraints, canvasW, canvasH) {
-      // Initialize random positions
-      const positions = {};
-      for (const el of elements) {
-        positions[el] = {
-          x: canvasW/2 + (Math.random() - 0.5) * canvasW * 0.6,
-          y: canvasH/2 + (Math.random() - 0.5) * canvasH * 0.6
-        };
-      }
-      
-      // Simple gradient descent for constraints
-      for (let iter = 0; iter < 100; iter++) {
-        for (const c of constraints) {
-          if (c.type === 'coincident' && positions[c.a] && positions[c.b]) {
-            // Make points coincide
-            const mx = (positions[c.a].x + positions[c.b].x) / 2;
-            const my = (positions[c.a].y + positions[c.b].y) / 2;
-            positions[c.a].x = mx;
-            positions[c.a].y = my;
-            positions[c.b].x = mx;
-            positions[c.b].y = my;
-          }
-          else if (c.type === 'onCircle' && positions[c.point] && positions[c.center]) {
-            // Place point on circle
-            const dx = positions[c.point].x - positions[c.center].x;
-            const dy = positions[c.point].y - positions[c.center].y;
-            const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-            const targetR = c.radius || 80;
-            positions[c.point].x = positions[c.center].x + dx * targetR / dist;
-            positions[c.point].y = positions[c.center].y + dy * targetR / dist;
-          }
-          else if (c.type === 'collinear' && positions[c.a] && positions[c.b] && positions[c.c]) {
-            // Place c on line ab
-            const ax = positions[c.a].x, ay = positions[c.a].y;
-            const bx = positions[c.b].x, by = positions[c.b].y;
-            const cx = positions[c.c].x, cy = positions[c.c].y;
-            // Project c onto line ab
-            const abx = bx - ax, aby = by - ay;
-            const acx = cx - ax, acy = cy - ay;
-            const abLen2 = abx*abx + aby*aby;
-            const t = (acx*abx + acy*aby) / (abLen2 || 1);
-            positions[c.c].x = ax + t * abx;
-            positions[c.c].y = ay + t * aby;
-          }
-          else if (c.type === 'midpoint' && positions[c.a] && positions[c.b] && positions[c.m]) {
-            // Place m at midpoint of ab
-            positions[c.m].x = (positions[c.a].x + positions[c.b].x) / 2;
-            positions[c.m].y = (positions[c.a].y + positions[c.b].y) / 2;
-          }
-          else if (c.type === 'angle' && positions[c.vertex] && positions[c.a] && positions[c.b]) {
-            // Spread rays from vertex
-            const vx = positions[c.vertex].x, vy = positions[c.vertex].y;
-            const angle = c.value || Math.PI / 3;
-            const len = c.length || 80;
-            positions[c.a].x = vx + len * Math.cos(-angle/2);
-            positions[c.a].y = vy + len * Math.sin(-angle/2);
-            positions[c.b].x = vx + len * Math.cos(angle/2);
-            positions[c.b].y = vy + len * Math.sin(angle/2);
-          }
-        }
-      }
-      
-      return positions;
-    }
-
+    // Direct SVG generators for each geometry type
     function generatePenroseSVG(geomInfo) {
       if (!geomInfo) return '';
       
       const { name, points, lineParams, geomType } = geomInfo;
       const W = 400, H = 300;
+      const cx = W/2, cy = H/2 + 10;
       
-      // Define elements and constraints based on geometry type
-      let elements = [];
-      let constraints = [];
-      let shapes = []; // {type: 'circle'|'line'|'polygon', points: [...], style: {}}
+      let svg = `<svg class="penrose-canvas" viewBox="0 0 ${W} ${H}">`;
+      svg += `<rect width="${W}" height="${H}" fill="#181825"/>`;
+      svg += `<text x="${W/2}" y="22" text-anchor="middle" fill="#89b4fa" font-size="14" font-weight="bold">${escapeHtml(name)}</text>`;
       
       switch (geomType) {
         case 'butterfly': {
-          // Butterfly theorem: Circle with center O, chord PQ, midpoint M, chords AB and CD through M
-          elements = ['O', 'P', 'Q', 'M', 'A', 'B', 'C', 'D', 'X', 'Y'];
-          constraints = [
-            {type: 'onCircle', point: 'P', center: 'O', radius: 80},
-            {type: 'onCircle', point: 'Q', center: 'O', radius: 80},
-            {type: 'onCircle', point: 'A', center: 'O', radius: 80},
-            {type: 'onCircle', point: 'B', center: 'O', radius: 80},
-            {type: 'onCircle', point: 'C', center: 'O', radius: 80},
-            {type: 'onCircle', point: 'D', center: 'O', radius: 80},
-            {type: 'midpoint', a: 'P', b: 'Q', m: 'M'},
-            {type: 'collinear', a: 'A', b: 'M', c: 'B'},
-            {type: 'collinear', a: 'C', b: 'M', c: 'D'},
-            {type: 'collinear', a: 'A', b: 'D', c: 'X'},
-            {type: 'collinear', a: 'B', b: 'C', c: 'Y'},
-            {type: 'collinear', a: 'X', b: 'Y', c: 'M'},
-          ];
-          shapes = [
-            {type: 'circle', center: 'O', radius: 80, style: {stroke: '#89b4fa', width: 2}},
-            {type: 'segment', points: ['P', 'Q'], style: {stroke: '#a6e3a1', width: 1.5}},
-            {type: 'segment', points: ['A', 'B'], style: {stroke: '#6c7086', width: 1, dash: '4'}},
-            {type: 'segment', points: ['C', 'D'], style: {stroke: '#6c7086', width: 1, dash: '4'}},
-            {type: 'segment', points: ['A', 'D'], style: {stroke: '#f9e2af', width: 1}},
-            {type: 'segment', points: ['B', 'C'], style: {stroke: '#f9e2af', width: 1}},
-          ];
+          // Butterfly theorem diagram
+          const r = 90;
+          // Circle centered at O
+          svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="3" fill="#000"/>`;
+          svg += `<text x="${cx + 8}" y="${cy - 8}" fill="#cdd6f4" font-size="12">O</text>`;
+          
+          // Chord PQ (horizontal, below center)
+          const py = cy + 50;
+          const px = cx - 60, qx = cx + 60;
+          svg += `<line x1="${px}" y1="${py}" x2="${qx}" y2="${py}" stroke="#a6e3a1" stroke-width="2"/>`;
+          svg += `<circle cx="${px}" cy="${py}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${qx}" cy="${py}" r="3" fill="#000"/>`;
+          svg += `<text x="${px - 12}" y="${py + 5}" fill="#cdd6f4" font-size="12">P</text>`;
+          svg += `<text x="${qx + 5}" y="${py + 5}" fill="#cdd6f4" font-size="12">Q</text>`;
+          
+          // Midpoint M
+          const mx = (px + qx) / 2, my = py;
+          svg += `<circle cx="${mx}" cy="${my}" r="3" fill="#000"/>`;
+          svg += `<text x="${mx}" y="${my + 18}" text-anchor="middle" fill="#cdd6f4" font-size="12">M</text>`;
+          
+          // Chord AB through M (steep angle)
+          const ax = cx - 50, ay = cy - 70;
+          const bx = cx + 50, by = cy + 70;
+          svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#6c7086" stroke-width="1.5"/>`;
+          svg += `<circle cx="${ax}" cy="${ay}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${bx}" cy="${by}" r="3" fill="#000"/>`;
+          svg += `<text x="${ax - 10}" y="${ay - 5}" fill="#cdd6f4" font-size="12">A</text>`;
+          svg += `<text x="${bx + 5}" y="${by + 15}" fill="#cdd6f4" font-size="12">B</text>`;
+          
+          // Chord CD through M (different angle)
+          const dx = cx + 60, dy = cy - 60;
+          const cx2 = cx - 60, cy2 = cy + 60;
+          svg += `<line x1="${cx2}" y1="${cy2}" x2="${dx}" y2="${dy}" stroke="#6c7086" stroke-width="1.5"/>`;
+          svg += `<circle cx="${cx2}" cy="${cy2}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${dx}" cy="${dy}" r="3" fill="#000"/>`;
+          svg += `<text x="${cx2 - 10}" y="${cy2 + 15}" fill="#cdd6f4" font-size="12">C</text>`;
+          svg += `<text x="${dx + 5}" y="${dy - 5}" fill="#cdd6f4" font-size="12">D</text>`;
+          
+          // AD and BC segments (dashed)
+          svg += `<line x1="${ax}" y1="${ay}" x2="${dx}" y2="${dy}" stroke="#f9e2af" stroke-width="1" stroke-dasharray="4"/>`;
+          svg += `<line x1="${bx}" y1="${by}" x2="${cx2}" y2="${cy2}" stroke="#f9e2af" stroke-width="1" stroke-dasharray="4"/>`;
+          
+          // X and Y on PQ
+          const xy = cy + 50; // same y as PQ
+          const xx = cx - 20, yx = cx + 25;
+          svg += `<circle cx="${xx}" cy="${xy}" r="3" fill="#fab387"/>`;
+          svg += `<circle cx="${yx}" cy="${xy}" r="3" fill="#fab387"/>`;
+          svg += `<text x="${xx - 10}" y="${xy + 18}" fill="#fab387" font-size="12">X</text>`;
+          svg += `<text x="${yx + 5}" y="${xy + 18}" fill="#fab387" font-size="12">Y</text>`;
           break;
         }
         case 'triangle': {
-          elements = points.slice(0, 3);
-          if (elements.length < 3) elements = ['A', 'B', 'C'];
-          shapes = [
-            {type: 'polygon', points: elements, style: {stroke: '#89b4fa', width: 2, fill: 'none'}}
-          ];
+          const p1 = {x: cx, y: cy - 70};
+          const p2 = {x: cx - 70, y: cy + 50};
+          const p3 = {x: cx + 70, y: cy + 50};
+          svg += `<polygon points="${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          const labels = points.length >= 3 ? points : ['A', 'B', 'C'];
+          svg += `<circle cx="${p1.x}" cy="${p1.y}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${p2.x}" cy="${p2.y}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${p3.x}" cy="${p3.y}" r="3" fill="#000"/>`;
+          svg += `<text x="${p1.x}" y="${p1.y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${labels[0]}</text>`;
+          svg += `<text x="${p2.x - 10}" y="${p2.y + 15}" fill="#cdd6f4" font-size="12">${labels[1]}</text>`;
+          svg += `<text x="${p3.x + 10}" y="${p3.y + 15}" fill="#cdd6f4" font-size="12">${labels[2]}</text>`;
           break;
         }
         case 'circle': {
-          elements = ['O', ...points.slice(0, 1)];
-          if (elements.length < 2) elements = ['O', 'P'];
-          constraints = [
-            {type: 'onCircle', point: elements[1], center: 'O', radius: 80}
-          ];
-          shapes = [
-            {type: 'circle', center: 'O', radius: 80, style: {stroke: '#89b4fa', width: 2}}
-          ];
+          const r = 80;
+          svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="3" fill="#000"/>`;
+          svg += `<text x="${cx + 8}" y="${cy - 8}" fill="#cdd6f4" font-size="12">O</text>`;
+          const px = cx + r * Math.cos(Math.PI/4);
+          const py = cy + r * Math.sin(Math.PI/4);
+          svg += `<circle cx="${px}" cy="${py}" r="3" fill="#000"/>`;
+          const pLabel = points[0] || 'P';
+          svg += `<text x="${px + 8}" y="${py + 5}" fill="#cdd6f4" font-size="12">${pLabel}</text>`;
           break;
         }
         case 'parallel': {
-          elements = lineParams.slice(0, 2);
-          if (elements.length < 2) elements = ['l', 'm'];
-          shapes = [
-            {type: 'line', points: ['l1', 'l2'], style: {stroke: '#89b4fa', width: 2}},
-            {type: 'line', points: ['m1', 'm2'], style: {stroke: '#89b4fa', width: 2}}
-          ];
+          const y1 = cy - 40, y2 = cy + 40;
+          svg += `<line x1="${cx - 100}" y1="${y1}" x2="${cx + 100}" y2="${y1}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${cx - 100}" y1="${y2}" x2="${cx + 100}" y2="${y2}" stroke="#89b4fa" stroke-width="2"/>`;
+          const l1 = lineParams[0] || 'l';
+          const l2 = lineParams[1] || 'm';
+          svg += `<text x="${cx - 110}" y="${y1 - 5}" fill="#cdd6f4" font-size="12">${l1}</text>`;
+          svg += `<text x="${cx - 110}" y="${y2 - 5}" fill="#cdd6f4" font-size="12">${l2}</text>`;
+          svg += `<text x="${cx}" y="${cy + 80}" text-anchor="middle" fill="#a6e3a1" font-size="12">${l1} ∥ ${l2}</text>`;
           break;
         }
         case 'perpendicular': {
-          elements = ['P', 'A', 'B'];
-          constraints = [
-            {type: 'angle', vertex: 'P', a: 'A', b: 'B', value: Math.PI/2}
-          ];
-          shapes = [
-            {type: 'segment', points: ['P', 'A'], style: {stroke: '#89b4fa', width: 2}},
-            {type: 'segment', points: ['P', 'B'], style: {stroke: '#89b4fa', width: 2}},
-            {type: 'rightAngle', vertex: 'P', a: 'A', b: 'B', style: {stroke: '#f9e2af', width: 1.5}}
-          ];
+          const size = 70;
+          svg += `<line x1="${cx}" y1="${cy - size}" x2="${cx}" y2="${cy + size}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${cx - size}" y1="${cy}" x2="${cx + size}" y2="${cy}" stroke="#89b4fa" stroke-width="2"/>`;
+          // Right angle marker
+          const m = 15;
+          svg += `<polyline points="${cx + m},${cy} ${cx + m},${cy + m} ${cx},${cy + m}" fill="none" stroke="#f9e2af" stroke-width="1.5"/>`;
+          svg += `<text x="${cx}" y="${cy + size + 20}" text-anchor="middle" fill="#a6e3a1" font-size="12">⊥</text>`;
           break;
         }
         case 'midpoint': {
-          elements = points.slice(0, 3);
-          if (elements.length < 3) elements = ['A', 'B', 'M'];
-          constraints = [
-            {type: 'midpoint', a: elements[0], b: elements[1], m: elements[2]}
-          ];
-          shapes = [
-            {type: 'segment', points: [elements[0], elements[1]], style: {stroke: '#89b4fa', width: 2}}
-          ];
+          const labels = points.length >= 3 ? points : ['A', 'B', 'M'];
+          const ax = cx - 80, ay = cy;
+          const bx = cx + 80, by = cy;
+          const mx = (ax + bx) / 2, my = ay;
+          svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${ax}" cy="${ay}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${bx}" cy="${by}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${mx}" cy="${my}" r="3" fill="#000"/>`;
+          svg += `<text x="${ax - 10}" y="${ay - 10}" fill="#cdd6f4" font-size="12">${labels[0]}</text>`;
+          svg += `<text x="${bx + 5}" y="${by - 10}" fill="#cdd6f4" font-size="12">${labels[1]}</text>`;
+          svg += `<text x="${mx}" y="${my + 20}" text-anchor="middle" fill="#a6e3a1" font-size="12">${labels[2]}</text>`;
           break;
         }
         case 'segment': {
-          elements = points.slice(0, 2);
-          if (elements.length < 2) elements = ['A', 'B'];
-          shapes = [
-            {type: 'segment', points: elements, style: {stroke: '#89b4fa', width: 2}}
-          ];
+          const labels = points.length >= 2 ? points : ['A', 'B'];
+          const ax = cx - 60, ay = cy;
+          const bx = cx + 60, by = cy;
+          svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${ax}" cy="${ay}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${bx}" cy="${by}" r="3" fill="#000"/>`;
+          svg += `<text x="${ax - 10}" y="${ay - 10}" fill="#cdd6f4" font-size="12">${labels[0]}</text>`;
+          svg += `<text x="${bx + 5}" y="${by - 10}" fill="#cdd6f4" font-size="12">${labels[1]}</text>`;
           break;
         }
         case 'collinear': {
-          elements = points.slice(0, 4);
-          if (elements.length < 3) elements = ['A', 'B', 'C'];
-          constraints = [
-            {type: 'collinear', a: elements[0], b: elements[1], c: elements[2]}
-          ];
-          shapes = [
-            {type: 'line', points: [elements[0], elements[elements.length-1]], style: {stroke: '#89b4fa', width: 2}}
-          ];
+          const labels = points.length >= 3 ? points.slice(0, 4) : ['A', 'B', 'C'];
+          const y = cy;
+          const startX = cx - 100, endX = cx + 100;
+          svg += `<line x1="${startX}" y1="${y}" x2="${endX}" y2="${y}" stroke="#89b4fa" stroke-width="2"/>`;
+          const count = labels.length;
+          for (let i = 0; i < count; i++) {
+            const x = startX + (i / (count - 1)) * (endX - startX);
+            svg += `<circle cx="${x}" cy="${y}" r="3" fill="#000"/>`;
+            svg += `<text x="${x}" y="${y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${labels[i]}</text>`;
+          }
           break;
         }
         case 'rectangle': {
-          elements = points.slice(0, 4);
-          if (elements.length < 4) elements = ['A', 'B', 'C', 'D'];
-          shapes = [
-            {type: 'polygon', points: elements, style: {stroke: '#89b4fa', width: 2, fill: 'none'}}
-          ];
+          const labels = points.length >= 4 ? points : ['A', 'B', 'C', 'D'];
+          const w = 80, h = 60;
+          const p1 = {x: cx - w, y: cy - h};
+          const p2 = {x: cx + w, y: cy - h};
+          const p3 = {x: cx + w, y: cy + h};
+          const p4 = {x: cx - w, y: cy + h};
+          svg += `<polygon points="${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y} ${p4.x},${p4.y}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${p1.x}" cy="${p1.y}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${p2.x}" cy="${p2.y}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${p3.x}" cy="${p3.y}" r="3" fill="#000"/>`;
+          svg += `<circle cx="${p4.x}" cy="${p4.y}" r="3" fill="#000"/>`;
+          svg += `<text x="${p1.x - 10}" y="${p1.y - 5}" fill="#cdd6f4" font-size="12">${labels[0]}</text>`;
+          svg += `<text x="${p2.x + 5}" y="${p2.y - 5}" fill="#cdd6f4" font-size="12">${labels[1]}</text>`;
+          svg += `<text x="${p3.x + 5}" y="${p3.y + 15}" fill="#cdd6f4" font-size="12">${labels[2]}</text>`;
+          svg += `<text x="${p4.x - 10}" y="${p4.y + 15}" fill="#cdd6f4" font-size="12">${labels[3]}</text>`;
+          // Right angle marker
+          svg += `<polyline points="${p1.x + 12},${p1.y} ${p1.x + 12},${p1.y + 12} ${p1.x},${p1.y + 12}" fill="none" stroke="#f9e2af" stroke-width="1"/>`;
           break;
         }
         case 'angle': {
-          elements = points.slice(0, 3);
-          if (elements.length < 3) elements = ['A', 'B', 'C'];
-          shapes = [
-            {type: 'segment', points: [elements[1], elements[0]], style: {stroke: '#89b4fa', width: 2}},
-            {type: 'segment', points: [elements[1], elements[2]], style: {stroke: '#89b4fa', width: 2}},
-            {type: 'arc', center: elements[1], start: elements[0], end: elements[2], style: {stroke: '#f9e2af', width: 1.5}}
-          ];
+          const labels = points.length >= 3 ? points : ['A', 'B', 'C'];
+          const size = 60;
+          const vx = cx, vy = cy + 20;
+          const ax = vx - size, ay = vy - size * 0.8;
+          const bx = vx + size, by = vy - size * 0.8;
+          svg += `<line x1="${vx}" y1="${vy}" x2="${ax}" y2="${ay}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${vx}" y1="${vy}" x2="${bx}" y2="${by}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${vx}" cy="${vy}" r="3" fill="#000"/>`;
+          // Arc
+          svg += `<path d="M ${vx - 25} ${vy} A 25 25 0 0 1 ${vx + 25} ${vy}" fill="none" stroke="#f9e2af" stroke-width="1.5"/>`;
+          svg += `<text x="${ax - 10}" y="${ay - 5}" fill="#cdd6f4" font-size="12">${labels[0]}</text>`;
+          svg += `<text x="${vx}" y="${vy + 20}" text-anchor="middle" fill="#cdd6f4" font-size="12">${labels[1]}</text>`;
+          svg += `<text x="${bx + 5}" y="${by - 5}" fill="#cdd6f4" font-size="12">${labels[2]}</text>`;
           break;
         }
         default: {
-          elements = points.length > 0 ? points : ['A', 'B', 'C'];
+          // Generic: just show points
+          const labels = points.length > 0 ? points : ['A', 'B', 'C'];
+          for (let i = 0; i < labels.length; i++) {
+            const angle = (2 * Math.PI * i) / labels.length - Math.PI/2;
+            const px = cx + 50 * Math.cos(angle);
+            const py = cy + 50 * Math.sin(angle);
+            svg += `<circle cx="${px}" cy="${py}" r="3" fill="#000"/>`;
+            svg += `<text x="${px}" y="${py - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${labels[i]}</text>`;
+          }
         }
-      }
-      
-      // Solve layout
-      const positions = solveLayout(elements, constraints, W, H);
-      
-      // Generate SVG
-      let svg = `<svg class="penrose-canvas" viewBox="0 0 ${W} ${H}">`;
-      svg += `<rect width="${W}" height="${H}" fill="#181825"/>`;
-      svg += `<text x="${W/2}" y="20" text-anchor="middle" fill="#89b4fa" font-size="14" font-weight="bold">${escapeHtml(name)}</text>`;
-      
-      // Draw shapes
-      for (const shape of shapes) {
-        if (shape.type === 'circle') {
-          const c = positions[shape.center] || {x: W/2, y: H/2};
-          svg += `<circle cx="${c.x}" cy="${c.y}" r="${shape.radius}" fill="none" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"/>`;
-        }
-        else if (shape.type === 'segment') {
-          const p1 = positions[shape.points[0]] || {x: W/3, y: H/2};
-          const p2 = positions[shape.points[1]] || {x: 2*W/3, y: H/2};
-          const dash = shape.style.dash ? ` stroke-dasharray="${shape.style.dash}"` : '';
-          svg += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"${dash}/>`;
-        }
-        else if (shape.type === 'line') {
-          const p1 = positions[shape.points[0]] || {x: margin, y: H/2};
-          const p2 = positions[shape.points[1]] || {x: W-margin, y: H/2};
-          svg += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"/>`;
-        }
-        else if (shape.type === 'polygon') {
-          const pts = shape.points.map(p => {
-            const pos = positions[p] || {x: W/2, y: H/2};
-            return `${pos.x},${pos.y}`;
-          }).join(' ');
-          svg += `<polygon points="${pts}" fill="${shape.style.fill || 'none'}" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"/>`;
-        }
-        else if (shape.type === 'arc') {
-          const c = positions[shape.center] || {x: W/2, y: H/2};
-          const s = positions[shape.start] || {x: W/2-30, y: H/2};
-          const e = positions[shape.end] || {x: W/2+30, y: H/2};
-          const r = 30;
-          svg += `<path d="M ${s.x} ${s.y} A ${r} ${r} 0 0 1 ${e.x} ${e.y}" fill="none" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"/>`;
-        }
-        else if (shape.type === 'rightAngle') {
-          const v = positions[shape.vertex] || {x: W/2, y: H/2};
-          const a = positions[shape.a] || {x: W/2, y: H/2-30};
-          const b = positions[shape.b] || {x: W/2+30, y: H/2};
-          const size = 12;
-          // Calculate direction vectors
-          const dax = a.x - v.x, day = a.y - v.y;
-          const dbx = b.x - v.x, dby = b.y - v.y;
-          const la = Math.sqrt(dax*dax + day*day) || 1;
-          const lb = Math.sqrt(dbx*dbx + dby*dby) || 1;
-          const ux = dax/la, uy = day/la;
-          const vx_ = dbx/lb, vy_ = dby/lb;
-          const p1x = v.x + size * ux, p1y = v.y + size * uy;
-          const p2x = v.x + size * ux + size * vx_, p2y = v.y + size * uy + size * vy_;
-          const p3x = v.x + size * vx_, p3y = v.y + size * vy_;
-          svg += `<polyline points="${p1x},${p1y} ${p2x},${p2y} ${p3x},${p3y}" fill="none" stroke="${shape.style.stroke}" stroke-width="${shape.style.width}"/>`;
-        }
-      }
-      
-      // Draw points and labels
-      for (const el of elements) {
-        const pos = positions[el];
-        if (!pos) continue;
-        svg += `<circle cx="${pos.x}" cy="${pos.y}" r="4" fill="#f38ba8"/>`;
-        svg += `<text x="${pos.x}" y="${pos.y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${el}</text>`;
       }
       
       svg += '</svg>';
