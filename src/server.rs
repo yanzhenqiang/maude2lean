@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 #[cfg(feature = "server")]
 use std::path::PathBuf;
 #[cfg(feature = "server")]
-use std::sync::Mutex;
+use std::sync::Arc;
 
 #[cfg(feature = "server")]
 use axum::{
@@ -25,6 +25,7 @@ use tower_http::services::ServeFile;
 use crate::repl::Repl;
 
 #[cfg(feature = "server")]
+#[derive(Clone)]
 struct AppState {
     file_lines: Vec<String>,
     current_file: String,
@@ -32,7 +33,7 @@ struct AppState {
 }
 
 #[cfg(feature = "server")]
-static APP_STATE: Mutex<Option<AppState>> = Mutex::new(None);
+static APP_STATE: std::sync::Mutex<Option<AppState>> = std::sync::Mutex::new(None);
 
 #[derive(serde::Deserialize)]
 pub struct LoadRequest {
@@ -181,7 +182,7 @@ async fn line_info_handler(axum::extract::Query(params): axum::extract::Query<Ha
 
     let state_lock = APP_STATE.lock().unwrap();
     let state = match state_lock.as_ref() {
-        Some(s) => s,
+        Some(s) => s.clone(),
         None => {
             return Json(LineInfoResponse {
                 success: true,
@@ -193,8 +194,10 @@ async fn line_info_handler(axum::extract::Query(params): axum::extract::Query<Ha
             });
         }
     };
+    drop(state_lock);
 
     let mut info = Vec::new();
+    let mut goals_result = None;
     let mut penrose_available = false;
 
     if state.file_lines.is_empty() {
@@ -231,7 +234,7 @@ async fn line_info_handler(axum::extract::Query(params): axum::extract::Query<Ha
         success: true,
         line,
         info,
-        goals: None,
+        goals: goals_result,
         penrose_available,
         error: None,
     })
@@ -241,7 +244,7 @@ async fn line_info_handler(axum::extract::Query(params): axum::extract::Query<Ha
 async fn env_handler() -> Json<EnvResponse> {
     let state_lock = APP_STATE.lock().unwrap();
     let state = match state_lock.as_ref() {
-        Some(s) => s,
+        Some(s) => s.clone(),
         None => {
             return Json(EnvResponse {
                 success: true,
@@ -253,7 +256,7 @@ async fn env_handler() -> Json<EnvResponse> {
 
     Json(EnvResponse {
         success: true,
-        declarations: state.declarations.clone(),
+        declarations: state.declarations,
         error: None,
     })
 }
