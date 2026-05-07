@@ -22,7 +22,6 @@ use tower_http::services::ServeFile;
 #[cfg(feature = "server")]
 use crate::repl::Repl;
 
-#[cfg(feature = "server")]
 pub struct ServerState {
     loaded_files: Vec<String>,
     infix_ops: HashMap<String, String>,
@@ -30,7 +29,6 @@ pub struct ServerState {
     declarations: Vec<String>,
 }
 
-#[cfg(feature = "server")]
 impl Default for ServerState {
     fn default() -> Self {
         Self {
@@ -88,10 +86,15 @@ pub struct NotationsResponse {
     pub notations: HashMap<String, String>,
 }
 
+#[derive(serde::Serialize)]
+pub struct ListFilesResponse {
+    pub success: bool,
+    pub files: Vec<String>,
+    pub error: Option<String>,
+}
+
 #[cfg(feature = "server")]
 pub async fn start_server(port: u16, static_path: PathBuf) {
-    use tower_http::services::ServeFile;
-
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -195,13 +198,6 @@ async fn notations_handler() -> Json<NotationsResponse> {
     })
 }
 
-#[derive(serde::Serialize)]
-pub struct ListFilesResponse {
-    pub success: bool,
-    pub files: Vec<String>,
-    pub error: Option<String>,
-}
-
 #[cfg(feature = "server")]
 fn list_cic_files(lib_path: &PathBuf) -> Json<ListFilesResponse> {
     let mut files = Vec::new();
@@ -214,7 +210,7 @@ fn list_cic_files(lib_path: &PathBuf) -> Json<ListFilesResponse> {
                     collect_cic_files(&path, base, files);
                 } else if path.extension().map(|e| e == "cic").unwrap_or(false) {
                     if let Ok(relative) = path.strip_prefix(base) {
-                        files.push(relative.to_string_lossy().to_string());
+                        files.push(format!("lib/{}", relative.to_string_lossy()));
                     }
                 }
             }
@@ -248,23 +244,4 @@ fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> a
         }
     }
     (StatusCode::NOT_FOUND, "File not found").into_response()
-}
-
-fn tmpl_tui_index() -> String {
-    let css_path = "/assets/styles.css";
-    let js_path = "/assets/app.js";
-
-    format!(r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TinyCIC - Interactive Goal Viewer</title>
-  <link rel="stylesheet" href="{}">
-</head>
-<body>
-  <div id="app"></div>
-  <script type="module" src="{}"></script>
-</body>
-</html>"#, css_path, js_path)
 }
