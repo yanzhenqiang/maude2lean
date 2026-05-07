@@ -149,7 +149,10 @@
       loading: false,
       error: null,
       goals: [],
-      logs: []
+      logs: [],
+      currentFile: null,
+      infoLines: [],
+      penroseAvailable: false
     };
 
     const codeContent = document.getElementById('code-content');
@@ -211,59 +214,55 @@
     }
 
     function renderGoals() {
-      if (state.goals.length === 0) {
-        goalsPanel.innerHTML = '<div class="info-empty">Select a line to see goals</div>';
-        return;
-      }
-
-      let html = '';
-      for (let i = 0; i < state.goals.length; i++) {
-        const goal = state.goals[i];
-        html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #313244;">`;
-        html += `<div style="color: #fab387; font-weight: bold; margin-bottom: 5px;">Goal ${i + 1}</div>`;
-        if (goal.hypotheses && goal.hypotheses.length > 0) {
-          html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px;">Hypotheses:</div>`;
-          for (const hyp of goal.hypotheses) {
-            html += `<div class="hypothesis">${escapeHtml(hyp)}</div>`;
+      if (state.infoLines && state.infoLines.length > 0) {
+        let html = '';
+        for (const line of state.infoLines) {
+          const trimmed = line.trim();
+          if (trimmed === '────────────────────') {
+            html += `<div style="border-top: 1px solid #313244; margin: 8px 0;"></div>`;
+          } else if (trimmed.startsWith('⊢')) {
+            html += `<div class="goal">${escapeHtml(line)}</div>`;
+          } else if (trimmed.startsWith('let')) {
+            html += `<div style="color: #f9e2af;">${escapeHtml(line)}</div>`;
+          } else if (trimmed.includes(':')) {
+            html += `<div class="hypothesis">${escapeHtml(line)}</div>`;
+          } else {
+            html += `<div style="margin-bottom: 3px; word-wrap: break-word;">${escapeHtml(line)}</div>`;
           }
         }
-        html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px; margin-top: 5px;">Goal:</div>`;
-        html += `<div class="goal">${escapeHtml(goal.goal || '')}</div>`;
-        html += `</div>`;
+        goalsPanel.innerHTML = html;
+      } else if (state.goals.length === 0) {
+        goalsPanel.innerHTML = '<div class="info-empty">Select a line to see goals</div>';
+        return;
+      } else {
+        let html = '';
+        for (let i = 0; i < state.goals.length; i++) {
+          const goal = state.goals[i];
+          html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #313244;">`;
+          html += `<div style="color: #fab387; font-weight: bold; margin-bottom: 5px;">Goal ${i + 1}</div>`;
+          if (goal.hypotheses && goal.hypotheses.length > 0) {
+            html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px;">Hypotheses:</div>`;
+            for (const hyp of goal.hypotheses) {
+              html += `<div class="hypothesis">${escapeHtml(hyp)}</div>`;
+            }
+          }
+          html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px; margin-top: 5px;">Goal:</div>`;
+          html += `<div class="goal">${escapeHtml(goal.goal || '')}</div>`;
+          html += `</div>`;
+        }
+        goalsPanel.innerHTML = html;
       }
-      goalsPanel.innerHTML = html;
     }
 
     function renderPenrose() {
-      const isGeometryFile = fileSelector.value.toLowerCase().includes('geometry');
+      const isGeometryFile = (state.currentFile || '').toLowerCase().includes('geometry');
       
       if (!isGeometryFile) {
         penrosePanel.innerHTML = '<div class="info-empty">Penrose visualization available for geometry files</div>';
         return;
       }
       
-      // 检查当前行和前面的行，寻找theorem定义
-      let isTheoremContext = false;
-      for (let i = state.selectedLine; i >= 0 && i > state.selectedLine - 20; i--) {
-        const line = (state.fileContent[i] || '').toLowerCase();
-        if (line.includes('theorem') || line.includes('lemma') || line.includes('definition')) {
-          isTheoremContext = true;
-          break;
-        }
-        // 如果遇到了新的声明块的结束，停止查找
-        if (line.includes('qed.') || line.includes('def.') || line.trim().startsWith('--')) {
-          continue;
-        }
-      }
-      
-      // 更精确的判断：当前行或附近包含theorem/lemma/definition
-      const currentLine = state.fileContent[state.selectedLine] || '';
-      const isTheoremLine = currentLine.toLowerCase().includes('theorem') || 
-                            currentLine.toLowerCase().includes('lemma') || 
-                            currentLine.toLowerCase().includes('definition') ||
-                            isTheoremContext;
-      
-      if (!isTheoremLine) {
+      if (!state.penroseAvailable) {
         penrosePanel.innerHTML = '<div class="info-empty">Select a theorem line to see Penrose visualization</div>';
         return;
       }
@@ -342,10 +341,25 @@
             state.fileContent = content.split('\n');
             state.selectedLine = 0;
             state.error = null;
+            state.currentFile = targetPath;
             addLog(`Loaded file: ${targetPath}`, 'success');
           } else {
             state.error = `Cannot load file: ${targetPath}`;
             addLog(`Error loading file: ${targetPath}`, 'error');
+          }
+
+          const loadRes = await fetch(`${API_BASE}/load`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: targetPath, dependencies: [] })
+          });
+          if (loadRes.ok) {
+            const data = await loadRes.json();
+            if (data.success) {
+              addLog('File loaded successfully', 'success');
+            } else {
+              addLog(`Warning: ${data.error || 'File may have errors'}`, 'error');
+            }
           }
         } else {
           state.fileContent = [
@@ -359,6 +373,7 @@
             'for the selected line.'
           ];
           state.error = null;
+          state.currentFile = null;
         }
 
         const envRes = await fetch(`${API_BASE}/env`);
@@ -381,11 +396,17 @@
 
     async function fetchLineInfo(lineNum) {
       try {
-        const res = await fetch(`${API_BASE}/line-info?line=${lineNum}`);
+        let url = `${API_BASE}/line-info?line=${lineNum}`;
+        if (state.currentFile) {
+          url += `&file=${encodeURIComponent(state.currentFile)}`;
+        }
+        const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
           state.goals = data.goals || [];
-          if (state.goals.length === 0) {
+          state.penroseAvailable = data.penrose_available || false;
+          state.infoLines = data.info || [];
+          if (state.goals.length === 0 && state.infoLines.length === 0) {
             state.goals = [{
               hypotheses: [`Line ${lineNum + 1} selected`],
               goal: `Type information for line ${lineNum + 1}`
@@ -393,9 +414,13 @@
           }
         } else {
           state.goals = [];
+          state.penroseAvailable = false;
+          state.infoLines = [];
         }
       } catch (e) {
         state.goals = [];
+        state.penroseAvailable = false;
+        state.infoLines = [];
       }
     }
 
