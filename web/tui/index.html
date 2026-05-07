@@ -354,6 +354,26 @@
             };
           }
           
+          // Helper: find point on circle such that line through p1 and p2 passes through M
+          // Given p1 on circle, find p2 on circle such that line p1-p2 passes through M
+          function findChordThroughM(p1AngleDeg, m) {
+            const p1 = ptOnCircle(p1AngleDeg);
+            // Line from p1 through M: parametric form p1 + t*(M - p1)
+            // Find intersection with circle (other than p1)
+            const dx = m.x - p1.x;
+            const dy = m.y - p1.y;
+            // Solve: (p1.x + t*dx - cx)^2 + (p1.y + t*dy - cy)^2 = r^2
+            // Since p1 is on circle, one solution is t=0, the other is:
+            const a = dx*dx + dy*dy;
+            const b = 2*((p1.x - cx)*dx + (p1.y - cy)*dy);
+            // c = 0 since p1 is on circle
+            const t2 = -b / a; // other intersection (t=0 is p1)
+            return {
+              x: p1.x + t2 * dx,
+              y: p1.y + t2 * dy
+            };
+          }
+          
           // P and Q on circle (chord PQ, roughly horizontal, below center)
           const P = ptOnCircle(140);
           const Q = ptOnCircle(40);
@@ -368,20 +388,18 @@
           svg += `<circle cx="${M.x}" cy="${M.y}" r="3" fill="#000"/>`;
           svg += `<text x="${M.x}" y="${M.y + 18}" text-anchor="middle" fill="#cdd6f4" font-size="12">M</text>`;
           
-          // A and B on circle, chord AB passes through M
-          // A at upper left, B at lower right
-          const A = ptOnCircle(200);
-          const B = ptOnCircle(-20);
+          // A at upper left, then find B such that AB passes through M
+          const A = ptOnCircle(210);
+          const B = findChordThroughM(210, M);
           svg += `<line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke="#6c7086" stroke-width="1.5"/>`;
           svg += `<circle cx="${A.x}" cy="${A.y}" r="3" fill="#000"/>`;
           svg += `<circle cx="${B.x}" cy="${B.y}" r="3" fill="#000"/>`;
           svg += `<text x="${A.x - 12}" y="${A.y - 5}" fill="#cdd6f4" font-size="12">A</text>`;
           svg += `<text x="${B.x + 5}" y="${B.y + 15}" fill="#cdd6f4" font-size="12">B</text>`;
           
-          // C and D on circle, chord CD passes through M
-          // C at lower left, D at upper right
-          const C = ptOnCircle(220);
-          const D = ptOnCircle(70);
+          // C at lower left, then find D such that CD passes through M
+          const C = ptOnCircle(230);
+          const D = findChordThroughM(230, M);
           svg += `<line x1="${C.x}" y1="${C.y}" x2="${D.x}" y2="${D.y}" stroke="#6c7086" stroke-width="1.5"/>`;
           svg += `<circle cx="${C.x}" cy="${C.y}" r="3" fill="#000"/>`;
           svg += `<circle cx="${D.x}" cy="${D.y}" r="3" fill="#000"/>`;
@@ -394,7 +412,6 @@
           
           // X is intersection of AD with PQ
           // Y is intersection of BC with PQ
-          // For simplicity, calculate line intersections
           function lineIntersection(p1, p2, p3, p4) {
             const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
             const x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y;
