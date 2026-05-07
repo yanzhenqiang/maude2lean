@@ -234,7 +234,8 @@ fn list_cic_files(lib_path: &PathBuf) -> Json<ListFilesResponse> {
 #[cfg(feature = "server")]
 fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> axum::response::Response {
     if let Some(path) = params.get("path") {
-        let full_path = static_path.join(path);
+        let project_root = static_path.parent().unwrap();
+        let full_path = project_root.join(path);
         if full_path.exists() && full_path.is_file() {
             match fs::read_to_string(&full_path) {
                 Ok(content) => {
