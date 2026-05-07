@@ -99,6 +99,7 @@ pub async fn start_server(port: u16, static_path: PathBuf) {
 
     let api_static_path = static_path.clone();
     let index_path = static_path.join("tui").join("index.html");
+    let lib_path = static_path.parent().unwrap().join("lib");
 
     let app = Router::new()
         .route("/", get_service(ServeFile::new(&index_path)).layer(cors.clone()))
@@ -107,6 +108,7 @@ pub async fn start_server(port: u16, static_path: PathBuf) {
         .route("/api/env", get(env_handler))
         .route("/api/infix-ops", get(infix_ops_handler))
         .route("/api/notations", get(notations_handler))
+        .route("/api/list-files", get(move || async move { list_cic_files(&lib_path) }))
         .route("/api/file", get(move |axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>| async move {
             file_handler_impl(params, api_static_path.clone())
         }))
@@ -190,6 +192,42 @@ async fn notations_handler() -> Json<NotationsResponse> {
     Json(NotationsResponse {
         success: true,
         notations: HashMap::new(),
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct ListFilesResponse {
+    pub success: bool,
+    pub files: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "server")]
+fn list_cic_files(lib_path: &PathBuf) -> Json<ListFilesResponse> {
+    let mut files = Vec::new();
+    
+    fn collect_cic_files(dir: &PathBuf, base: &PathBuf, files: &mut Vec<String>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_cic_files(&path, base, files);
+                } else if path.extension().map(|e| e == "cic").unwrap_or(false) {
+                    if let Ok(relative) = path.strip_prefix(base) {
+                        files.push(relative.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    
+    collect_cic_files(lib_path, lib_path, &mut files);
+    files.sort();
+    
+    Json(ListFilesResponse {
+        success: true,
+        files,
+        error: None,
     })
 }
 
