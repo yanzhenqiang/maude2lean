@@ -28,6 +28,9 @@ fn main() {
             }
             run_tui(&args[2..]);
         }
+        "serve" => {
+            run_server();
+        }
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             print_usage(&args[0]);
@@ -43,6 +46,7 @@ fn print_usage(prog: &str) {
     eprintln!("  repl                         Start interactive Lean REPL");
     eprintln!("  check-files <file>...        Batch check .cic files");
     eprintln!("  tui <target> [deps...]       Interactive TUI goal viewer");
+    eprintln!("  serve [port]                Start web server (default port: 8080)");
     eprintln!("");
 }
 
@@ -226,6 +230,7 @@ fn run_check_files(files: &[String]) {
     }
 }
 
+#[cfg(not(feature = "server"))]
 fn run_tui(args: &[String]) {
     use std::fs;
 
@@ -268,5 +273,32 @@ fn run_tui(args: &[String]) {
         eprintln!("TUI error: {}", e);
         std::process::exit(1);
     }
+}
+
+#[cfg(feature = "server")]
+fn run_tui(_args: &[String]) {
+    eprintln!("TUI is not available with server feature. Use 'serve' command instead.");
+    std::process::exit(1);
+}
+
+#[cfg(feature = "server")]
+fn run_server() {
+    use tinycic::server::start_server;
+    use std::path::PathBuf;
+
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8080);
+
+    let static_path = PathBuf::from("web");
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    rt.block_on(start_server(port, static_path));
+}
+
+#[cfg(not(feature = "server"))]
+fn run_server() {
+    eprintln!("Server feature not enabled. Build with: cargo build --features server");
+    std::process::exit(1);
 }
 

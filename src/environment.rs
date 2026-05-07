@@ -1166,6 +1166,10 @@ impl Environment {
     pub fn num_constants(&self) -> usize {
         self.constants.len()
     }
+
+    pub fn iter_names(&self) -> impl Iterator<Item = &Name> {
+        self.constants.keys()
+    }
 }
 
 impl Default for Environment {

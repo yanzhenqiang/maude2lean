@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TinyCIC - Interactive Goal Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+      font-size: 14px;
+      background-color: #1e1e2e;
+      color: #cdd6f4;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 20px;
+      background-color: #181825;
+      border-bottom: 1px solid #313244;
+    }
+    .header h1 { font-size: 18px; color: #89b4fa; }
+    .controls { display: flex; gap: 10px; align-items: center; }
+    .controls select, .controls button {
+      padding: 6px 12px;
+      background-color: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+    }
+    .controls select:hover, .controls button:hover { background-color: #45475a; }
+    .controls select { min-width: 200px; }
+    .main-content { display: flex; height: calc(100vh - 50px); }
+    .code-panel { display: flex; flex-direction: column; border-right: 1px solid #313244; width: 50%; min-width: 300px; }
+    .info-panel { flex: 1; display: flex; flex-direction: column; }
+    .panel-header {
+      padding: 8px 15px;
+      background-color: #181825;
+      color: #6c7086;
+      font-size: 12px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #313244;
+    }
+    .code-content { flex: 1; overflow-y: auto; padding: 5px 0; }
+    .code-line { display: flex; padding: 1px 10px; cursor: pointer; }
+    .code-line:hover { background-color: #252535; }
+    .code-line.selected { background-color: #2a2a3d; }
+    .line-num { color: #6c7086; width: 35px; text-align: right; margin-right: 10px; user-select: none; }
+    .line-marker { color: #89b4fa; width: 15px; user-select: none; }
+    .line-content { color: #cdd6f4; white-space: pre; }
+    .info-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .sub-panel { flex: 1; display: flex; flex-direction: column; border-bottom: 1px solid #313244; }
+    .sub-panel:last-child { border-bottom: none; }
+    .sub-panel-header {
+      padding: 6px 12px;
+      background-color: #1e1e2e;
+      color: #6c7086;
+      font-size: 11px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #313244;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .resample-btn {
+      background: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10px;
+      cursor: pointer;
+      text-transform: none;
+    }
+    .resample-btn:hover {
+      background: #45475a;
+    }
+    .sub-panel-content { flex: 1; overflow-y: auto; padding: 10px; }
+    .info-empty { color: #6c7086; font-style: italic; }
+    .info-line { margin-bottom: 3px; word-wrap: break-word; }
+    .goals-section { margin-top: 15px; padding-top: 10px; border-top: 1px solid #313244; }
+    .hypothesis { color: #f9e2af; margin-bottom: 2px; padding-left: 10px; }
+    .goal { color: #a6e3a1; padding-left: 10px; }
+    .penrose-canvas { width: 100%; height: 100%; background-color: #181825; border-radius: 4px; }
+    .log-entry { font-size: 12px; margin-bottom: 2px; }
+    .log-info { color: #89b4fa; }
+    .log-error { color: #f38ba8; }
+    .log-success { color: #a6e3a1; }
+    .status-bar {
+      display: flex; gap: 15px; padding: 8px 15px;
+      background-color: #181825; border-top: 1px solid #313244;
+      font-size: 12px; color: #6c7086;
+    }
+    .loading, .error {
+      display: flex; justify-content: center; align-items: center;
+      height: 100%; font-size: 16px;
+    }
+    .loading { color: #89b4fa; }
+    .error { color: #f38ba8; }
+    ::-webkit-scrollbar { width: 10px; }
+    ::-webkit-scrollbar-track { background: #1e1e2e; }
+    ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 5px; }
+    .resizer {
+      width: 5px;
+      background-color: #313244;
+      cursor: col-resize;
+      user-select: none;
+      transition: background-color 0.2s;
+    }
+    .resizer:hover {
+      background-color: #89b4fa;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>TinyCIC Goal Viewer</h1>
+    <div class="controls">
+      <select id="file-selector">
+        <option value="">-- Select a file --</option>
+      </select>
+      <button id="btn-reload">Reload</button>
+      <button id="btn-typecheck">TypeCheck</button>
+    </div>
+  </div>
+  <div class="main-content">
+    <div class="code-panel" id="code-panel">
+      <div class="panel-header">Source</div>
+      <div class="code-content" id="code-content"></div>
+    </div>
+    <div class="resizer" id="resizer"></div>
+    <div class="info-panel">
+      <div class="panel-header">Goal / Penrose / Log</div>
+      <div class="info-content" id="info-content">
+        <div class="sub-panel">
+          <div class="sub-panel-header">Goals</div>
+          <div class="sub-panel-content" id="goals-panel"></div>
+        </div>
+        <div class="sub-panel">
+          <div class="sub-panel-header">
+            Penrose
+            <button id="resample-btn" class="resample-btn" title="Resample layout">↻ Resample</button>
+          </div>
+          <div class="sub-panel-content" id="penrose-panel"></div>
+        </div>
+        <div class="sub-panel">
+          <div class="sub-panel-header">TypeCheck Log</div>
+          <div class="sub-panel-content" id="log-panel"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="status-bar" id="status-bar"></div>
+
+  <script type="module">
+    const API_BASE = '/api';
+    let state = {
+      fileContent: [],
+      selectedLine: 0,
+      declarations: [],
+      availableFiles: [],
+      loading: false,
+      error: null,
+      goals: [],
+      logs: [],
+      currentFile: null,
+      infoLines: [],
+      penroseAvailable: false
+    };
+
+    const codeContent = document.getElementById('code-content');
+    const goalsPanel = document.getElementById('goals-panel');
+    const penrosePanel = document.getElementById('penrose-panel');
+    const logPanel = document.getElementById('log-panel');
+    const statusBar = document.getElementById('status-bar');
+    const fileSelector = document.getElementById('file-selector');
+    const resizer = document.getElementById('resizer');
+    const codePanel = document.getElementById('code-panel');
+    const resampleBtn = document.getElementById('resample-btn');
+    
+    // Random seed for resampling
+    let penroseSeed = 0;
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function render() {
+      if (state.loading) {
+        codeContent.innerHTML = '<div class="loading">Loading...</div>';
+        goalsPanel.innerHTML = '<div class="loading">Loading...</div>';
+        penrosePanel.innerHTML = '';
+        logPanel.innerHTML = '';
+        return;
+      }
+      if (state.error) {
+        codeContent.innerHTML = `<div class="error">${escapeHtml(state.error)}</div>`;
+        goalsPanel.innerHTML = `<div class="error">${escapeHtml(state.error)}</div>`;
+        penrosePanel.innerHTML = '';
+        logPanel.innerHTML = '';
+        return;
+      }
+
+      const lines = state.fileContent.length > 0 ? state.fileContent : [''];
+      let codeHtml = '';
+      for (let i = 0; i < lines.length; i++) {
+        const isSelected = i === state.selectedLine;
+        const cls = isSelected ? 'code-line selected' : 'code-line';
+        const marker = isSelected ? '>' : ' ';
+        codeHtml += `<div class="${cls}" data-line="${i}">
+          <span class="line-num">${String(i + 1).padStart(3)}</span>
+          <span class="line-marker">${marker}</span>
+          <span class="line-content">${escapeHtml(lines[i])}</span>
+        </div>`;
+      }
+      codeContent.innerHTML = codeHtml;
+
+      renderGoals();
+      renderPenrose();
+      renderLogs();
+
+      statusBar.innerHTML = `
+        <span>Line ${state.selectedLine + 1}/${state.fileContent.length}</span>
+        <span>|</span>
+        <span>${state.declarations.length} declarations</span>
+        <span>|</span>
+        <span>${state.goals.length} goals</span>
+      `;
+    }
+
+    function renderGoals() {
+      // Only show goals when inside a theorem/axiom/def
+      const geomInfo = parseGeometryInfo();
+      if (!geomInfo || !geomInfo.declType) {
+        goalsPanel.innerHTML = '<div class="info-empty">Select a theorem or axiom line to see goals</div>';
+        return;
+      }
+      
+      if (state.infoLines && state.infoLines.length > 0) {
+        let html = '';
+        for (const line of state.infoLines) {
+          const trimmed = line.trim();
+          if (trimmed === '────────────────────') {
+            html += `<div style="border-top: 1px solid #313244; margin: 8px 0;"></div>`;
+          } else if (trimmed.startsWith('⊢')) {
+            html += `<div class="goal">${escapeHtml(line)}</div>`;
+          } else if (trimmed.startsWith('let')) {
+            html += `<div style="color: #f9e2af;">${escapeHtml(line)}</div>`;
+          } else if (trimmed.includes(':')) {
+            html += `<div class="hypothesis">${escapeHtml(line)}</div>`;
+          } else {
+            html += `<div style="margin-bottom: 3px; word-wrap: break-word;">${escapeHtml(line)}</div>`;
+          }
+        }
+        goalsPanel.innerHTML = html;
+      } else if (state.goals.length === 0) {
+        goalsPanel.innerHTML = '<div class="info-empty">No goals available</div>';
+        return;
+      } else {
+        let html = '';
+        for (let i = 0; i < state.goals.length; i++) {
+          const goal = state.goals[i];
+          html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #313244;">`;
+          html += `<div style="color: #fab387; font-weight: bold; margin-bottom: 5px;">Goal ${i + 1}</div>`;
+          if (goal.hypotheses && goal.hypotheses.length > 0) {
+            html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px;">Hypotheses:</div>`;
+            for (const hyp of goal.hypotheses) {
+              html += `<div class="hypothesis">${escapeHtml(hyp)}</div>`;
+            }
+          }
+          html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px; margin-top: 5px;">Goal:</div>`;
+          html += `<div class="goal">${escapeHtml(goal.goal || '')}</div>`;
+          html += `</div>`;
+        }
+        goalsPanel.innerHTML = html;
+      }
+    }
+
+    // Simplified Penrose-style geometry renderer
+    // Inspired by https://penrose.cs.cmu.edu/ - declarative geometry diagrams
+    
+    function parseGeometryInfo() {
+      const lines = state.fileContent;
+      const currentLine = state.selectedLine;
+      
+      // Find the theorem/axiom/def declaration
+      let theoremLine = -1;
+      let declType = '';
+      for (let i = currentLine; i >= 0; i--) {
+        const trimmed = lines[i].trim();
+        if (trimmed.startsWith('theorem ')) { theoremLine = i; declType = 'theorem'; break; }
+        else if (trimmed.startsWith('axiom ')) { theoremLine = i; declType = 'axiom'; break; }
+        else if (trimmed.startsWith('def ')) { theoremLine = i; declType = 'def'; break; }
+      }
+      
+      if (theoremLine === -1) return null;
+      
+      const declLine = lines[theoremLine].trim();
+      
+      // Extract theorem name
+      const nameMatch = declLine.match(/(?:theorem|def|axiom)\s+(\w+)/);
+      const name = nameMatch ? nameMatch[1] : '';
+      
+      // Extract point parameters
+      const points = [];
+      const pointRegex = /\(\s*(\w+)\s*:\s*Point\s*\)/g;
+      let match;
+      while ((match = pointRegex.exec(declLine)) !== null) {
+        points.push(match[1]);
+      }
+      
+      // Extract line parameters
+      const lineParams = [];
+      const lineRegex = /\(\s*(\w+)\s*:\s*Line\s*\)/g;
+      while ((match = lineRegex.exec(declLine)) !== null) {
+        lineParams.push(match[1]);
+      }
+      
+      // Determine geometry type
+      let geomType = 'generic';
+      const lowerName = name.toLowerCase();
+      const lowerDecl = declLine.toLowerCase();
+      
+      if (lowerName.includes('butterfly')) geomType = 'butterfly';
+      else if (lowerName.includes('triangle') || lowerDecl.includes('triangle')) geomType = 'triangle';
+      else if (lowerName.includes('circle') || lowerDecl.includes('circle')) geomType = 'circle';
+      else if (lowerName.includes('parallel')) geomType = 'parallel';
+      else if (lowerName.includes('perpendicular')) geomType = 'perpendicular';
+      else if (lowerName.includes('midpoint')) geomType = 'midpoint';
+      else if (lowerName.includes('between')) geomType = 'segment';
+      else if (lowerName.includes('collinear')) geomType = 'collinear';
+      else if (lowerName.includes('rectangle')) geomType = 'rectangle';
+      else if (lowerName.includes('isosceles')) geomType = 'isosceles';
+      else if (lowerName.includes('equilateral')) geomType = 'equilateral';
+      else if (lowerName.includes('angle')) geomType = 'angle';
+      else if (points.length >= 3) geomType = 'triangle';
+      else if (points.length === 2) geomType = 'segment';
+      
+      return { name, points, lineParams, geomType, declLine, declType };
+    }
+
+    // Unified color scheme from Penrose style
+    const PENROSE_COLOR = '#425664';
+    const PENROSE_BG = '#F6F4F2';
+    const POINT_RADIUS = 4;
+    const STROKE_WIDTH = 1.75;
+    const FONT_SIZE = '16px';
+    
+    // Simple random number generator with seed
+    function seededRandom(seed) {
+      let s = seed;
+      return function() {
+        s = (s * 16807 + 0) % 2147483647;
+        return (s - 1) / 2147483646;
+      };
+    }
+    
+    // AutoLabel: place label near point with offset to avoid overlap
+    function autoLabel(svg, x, y, label, offsetX = 0, offsetY = -15) {
+      const lx = x + offsetX;
+      const ly = y + offsetY;
+      svg += `<text x="${lx}" y="${ly}" text-anchor="middle" fill="${PENROSE_COLOR}" font-size="${FONT_SIZE}" font-family="serif">${label}</text>`;
+      return svg;
+    }
+    
+    // Direct SVG generators for each geometry type
+    function generatePenroseSVG(geomInfo, seed = 0) {
+      if (!geomInfo) return '';
+      
+      const rand = seededRandom(seed);
+      const { name, points, lineParams, geomType } = geomInfo;
+      const W = 400, H = 300;
+      // Randomize center slightly for resampling effect
+      const cx = W/2 + (rand() - 0.5) * 20;
+      const cy = H/2 + 10 + (rand() - 0.5) * 20;
+      
+      let svg = `<svg class="penrose-canvas" viewBox="0 0 ${W} ${H}">`;
+      svg += `<rect width="${W}" height="${H}" fill="${PENROSE_BG}"/>`;
+      svg += `<text x="${W/2}" y="22" text-anchor="middle" fill="${PENROSE_COLOR}" font-size="14" font-weight="bold" font-family="serif">${escapeHtml(name)}</text>`;
+      
+      switch (geomType) {
+        case 'butterfly': {
+          const r = 95;
+          
+          // Circle centered at O
+          svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg = autoLabel(svg, cx, cy, 'O', 12, -8);
+          
+          function ptOnCircle(angleDeg) {
+            const angle = angleDeg * Math.PI / 180;
+            return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+          }
+          
+          function findChordThroughM(p1AngleDeg, m) {
+            const p1 = ptOnCircle(p1AngleDeg);
+            const dx = m.x - p1.x, dy = m.y - p1.y;
+            const a = dx*dx + dy*dy;
+            const b = 2*((p1.x - cx)*dx + (p1.y - cy)*dy);
+            const t2 = -b / a;
+            return { x: p1.x + t2 * dx, y: p1.y + t2 * dy };
+          }
+          
+          // P and Q (randomize angles for resampling)
+          const pAngle = 140 + (rand() - 0.5) * 20;
+          const qAngle = 40 + (rand() - 0.5) * 20;
+          const P = ptOnCircle(pAngle);
+          const Q = ptOnCircle(qAngle);
+          svg += `<line x1="${P.x}" y1="${P.y}" x2="${Q.x}" y2="${Q.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg += `<circle cx="${P.x}" cy="${P.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg += `<circle cx="${Q.x}" cy="${Q.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg = autoLabel(svg, P.x, P.y, 'P', -15, 5);
+          svg = autoLabel(svg, Q.x, Q.y, 'Q', 5, 5);
+          
+          // M
+          const M = { x: (P.x + Q.x)/2, y: (P.y + Q.y)/2 };
+          svg += `<circle cx="${M.x}" cy="${M.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg = autoLabel(svg, M.x, M.y, 'M', 0, 18);
+          
+          // A, B through M (randomize angles for resampling)
+          const aAngle = 210 + (rand() - 0.5) * 30;
+          const A = ptOnCircle(aAngle);
+          const B = findChordThroughM(aAngle, M);
+          svg += `<line x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg += `<circle cx="${A.x}" cy="${A.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg += `<circle cx="${B.x}" cy="${B.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg = autoLabel(svg, A.x, A.y, 'A', -12, -5);
+          svg = autoLabel(svg, B.x, B.y, 'B', 5, 15);
+          
+          // C, D through M (randomize angles for resampling)
+          const cAngle = 230 + (rand() - 0.5) * 30;
+          const C = ptOnCircle(cAngle);
+          const D = findChordThroughM(cAngle, M);
+          svg += `<line x1="${C.x}" y1="${C.y}" x2="${D.x}" y2="${D.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg += `<circle cx="${C.x}" cy="${C.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg += `<circle cx="${D.x}" cy="${D.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg = autoLabel(svg, C.x, C.y, 'C', -12, 15);
+          svg = autoLabel(svg, D.x, D.y, 'D', 5, -5);
+          
+          // AD and BC (solid lines)
+          svg += `<line x1="${A.x}" y1="${A.y}" x2="${D.x}" y2="${D.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg += `<line x1="${B.x}" y1="${B.y}" x2="${C.x}" y2="${C.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          
+          // X, Y intersections
+          function lineIntersection(p1, p2, p3, p4) {
+            const x1=p1.x,y1=p1.y,x2=p2.x,y2=p2.y,x3=p3.x,y3=p3.y,x4=p4.x,y4=p4.y;
+            const denom=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+            if(Math.abs(denom)<0.001)return null;
+            const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/denom;
+            return{x:x1+t*(x2-x1),y:y1+t*(y2-y1)};
+          }
+          const X=lineIntersection(A,D,P,Q), Y=lineIntersection(B,C,P,Q);
+          if(X){svg+=`<circle cx="${X.x}" cy="${X.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`; svg=autoLabel(svg,X.x,X.y,'X',-10,18);}
+          if(Y){svg+=`<circle cx="${Y.x}" cy="${Y.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`; svg=autoLabel(svg,Y.x,Y.y,'Y',5,18);}
+          if(X&&Y)svg+=`<line x1="${X.x}" y1="${X.y}" x2="${Y.x}" y2="${Y.y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          break;
+        }
+        case 'triangle': {
+          const p1={x:cx,y:cy-70}, p2={x:cx-70,y:cy+50}, p3={x:cx+70,y:cy+50};
+          svg+=`<polygon points="${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          const labels=points.length>=3?points:['A','B','C'];
+          [p1,p2,p3].forEach((p,i)=>{
+            svg+=`<circle cx="${p.x}" cy="${p.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            const ox=i===0?0:(i===1?-15:15), oy=i===0?-10:15;
+            svg=autoLabel(svg,p.x,p.y,labels[i],ox,oy);
+          });
+          break;
+        }
+        case 'circle': {
+          const r=80;
+          svg+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg+=`<circle cx="${cx}" cy="${cy}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg=autoLabel(svg,cx,cy,'O',12,-8);
+          const px=cx+r*Math.cos(Math.PI/4), py=cy+r*Math.sin(Math.PI/4);
+          svg+=`<circle cx="${px}" cy="${py}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg=autoLabel(svg,px,py,points[0]||'P',8,5);
+          break;
+        }
+        case 'parallel': {
+          const y1=cy-40,y2=cy+40;
+          svg+=`<line x1="${cx-100}" y1="${y1}" x2="${cx+100}" y2="${y1}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg+=`<line x1="${cx-100}" y1="${y2}" x2="${cx+100}" y2="${y2}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          const l1=lineParams[0]||'l', l2=lineParams[1]||'m';
+          svg=autoLabel(svg,cx-100,y1,l1,-15,-5);
+          svg=autoLabel(svg,cx-100,y2,l2,-15,-5);
+          break;
+        }
+        case 'perpendicular': {
+          const size=70;
+          svg+=`<line x1="${cx}" y1="${cy-size}" x2="${cx}" y2="${cy+size}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg+=`<line x1="${cx-size}" y1="${cy}" x2="${cx+size}" y2="${cy}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          const m=12;
+          svg+=`<polyline points="${cx+m},${cy} ${cx+m},${cy+m} ${cx},${cy+m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1.5"/>`;
+          break;
+        }
+        case 'midpoint': {
+          const labels=points.length>=3?points:['A','B','M'];
+          const ax=cx-80,ay=cy,bx=cx+80,by=cy,mx=(ax+bx)/2,my=ay;
+          svg+=`<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          [ax,bx,mx].forEach((x,i)=>{
+            svg+=`<circle cx="${x}" cy="${my}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            const oy=i===2?18:-10;
+            svg=autoLabel(svg,x,my,labels[i],0,oy);
+          });
+          break;
+        }
+        case 'segment': {
+          const labels=points.length>=2?points:['A','B'];
+          const ax=cx-60,ay=cy,bx=cx+60,by=cy;
+          svg+=`<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          [ax,bx].forEach((x,i)=>{
+            svg+=`<circle cx="${x}" cy="${ay}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            svg=autoLabel(svg,x,ay,labels[i],0,-10);
+          });
+          break;
+        }
+        case 'collinear': {
+          const labels=points.length>=3?points.slice(0,4):['A','B','C'];
+          const y=cy,startX=cx-100,endX=cx+100;
+          svg+=`<line x1="${startX}" y1="${y}" x2="${endX}" y2="${y}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          labels.forEach((l,i)=>{
+            const x=startX+(i/(labels.length-1))*(endX-startX);
+            svg+=`<circle cx="${x}" cy="${y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            svg=autoLabel(svg,x,y,l,0,-10);
+          });
+          break;
+        }
+        case 'rectangle': {
+          const labels=points.length>=4?points:['A','B','C','D'];
+          const w=90,h=60;
+          const pts=[{x:cx-w,y:cy-h},{x:cx+w,y:cy-h},{x:cx+w,y:cy+h},{x:cx-w,y:cy+h}];
+          svg+=`<polygon points="${pts.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          const offsets=[{ox:-12,oy:-10},{ox:12,oy:-10},{ox:12,oy:18},{ox:-12,oy:18}];
+          pts.forEach((p,i)=>{
+            svg+=`<circle cx="${p.x}" cy="${p.y}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            svg=autoLabel(svg,p.x,p.y,labels[i],offsets[i].ox,offsets[i].oy);
+          });
+          // Right angle markers at all four corners
+          const m=10;
+          svg+=`<polyline points="${pts[0].x+m},${pts[0].y} ${pts[0].x+m},${pts[0].y+m} ${pts[0].x},${pts[0].y+m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[1].x-m},${pts[1].y} ${pts[1].x-m},${pts[1].y+m} ${pts[1].x},${pts[1].y+m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[2].x-m},${pts[2].y} ${pts[2].x-m},${pts[2].y-m} ${pts[2].x},${pts[2].y-m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          svg+=`<polyline points="${pts[3].x+m},${pts[3].y} ${pts[3].x+m},${pts[3].y-m} ${pts[3].x},${pts[3].y-m}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1"/>`;
+          break;
+        }
+        case 'angle': {
+          const labels=points.length>=3?points:['A','B','C'];
+          const size=60,vx=cx,vy=cy+20,ax=vx-size,ay=vy-size*0.8,bx=vx+size,by=vy-size*0.8;
+          svg+=`<line x1="${vx}" y1="${vy}" x2="${ax}" y2="${ay}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg+=`<line x1="${vx}" y1="${vy}" x2="${bx}" y2="${by}" stroke="${PENROSE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+          svg+=`<circle cx="${vx}" cy="${vy}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+          svg+=`<path d="M ${vx-25} ${vy} A 25 25 0 0 1 ${vx+25} ${vy}" fill="none" stroke="${PENROSE_COLOR}" stroke-width="1.5"/>`;
+          svg=autoLabel(svg,ax,ay,labels[0],-10,-5);
+          svg=autoLabel(svg,vx,vy,labels[1],0,20);
+          svg=autoLabel(svg,bx,by,labels[2],8,-5);
+          break;
+        }
+        default: {
+          const labels=points.length>0?points:['A','B','C'];
+          labels.forEach((l,i)=>{
+            const angle=(2*Math.PI*i)/labels.length-Math.PI/2;
+            const px=cx+50*Math.cos(angle),py=cy+50*Math.sin(angle);
+            svg+=`<circle cx="${px}" cy="${py}" r="${POINT_RADIUS}" fill="${PENROSE_COLOR}"/>`;
+            svg=autoLabel(svg,px,py,l,0,-12);
+          });
+        }
+      }
+      
+      svg += '</svg>';
+      return svg;
+    }
+
+    function renderPenrose() {
+      const isGeometryFile = (state.currentFile || '').toLowerCase().includes('geometry');
+      
+      if (!isGeometryFile) {
+        penrosePanel.innerHTML = '<div class="info-empty">Penrose visualization available for geometry files</div>';
+        return;
+      }
+      
+      // Only show Penrose when inside a theorem/axiom/def
+      const geomInfo = parseGeometryInfo();
+      if (!geomInfo || !geomInfo.declType || (geomInfo.declType !== 'theorem' && geomInfo.declType !== 'axiom')) {
+        penrosePanel.innerHTML = '<div class="info-empty">Select a theorem or axiom line to see Penrose visualization</div>';
+        return;
+      }
+
+      const svg = generatePenroseSVG(geomInfo, penroseSeed);
+      
+      if (svg) {
+        penrosePanel.innerHTML = svg;
+      } else {
+        penrosePanel.innerHTML = '<div class="info-empty">Could not parse geometry information</div>';
+      }
+    }
+    
+    // Resample button handler
+    if (resampleBtn) {
+      resampleBtn.addEventListener('click', () => {
+        penroseSeed++;
+        renderPenrose();
+      });
+    }
+
+    function renderLogs() {
+      if (state.logs.length === 0) {
+        logPanel.innerHTML = '<div class="info-empty">Click TypeCheck to run type checking</div>';
+        return;
+      }
+
+      let html = '';
+      for (const log of state.logs) {
+        const cls = log.type === 'error' ? 'log-error' : log.type === 'success' ? 'log-success' : 'log-info';
+        html += `<div class="log-entry ${cls}">${escapeHtml(log.message)}</div>`;
+      }
+      logPanel.innerHTML = html;
+    }
+
+    function addLog(message, type = 'info') {
+      state.logs.push({ message, type });
+      if (state.logs.length > 100) state.logs.shift();
+      renderLogs();
+    }
+
+    function clearLogs() {
+      state.logs = [];
+      renderLogs();
+    }
+
+    async function loadAvailableFiles() {
+      try {
+        const res = await fetch(`${API_BASE}/list-files`);
+        if (res.ok) {
+          const data = await res.json();
+          state.availableFiles = data.files || [];
+          
+          fileSelector.innerHTML = '<option value="">-- Select a file --</option>';
+          for (const file of state.availableFiles) {
+            const opt = document.createElement('option');
+            opt.value = file;
+            opt.textContent = file;
+            fileSelector.appendChild(opt);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load file list:', e);
+      }
+    }
+
+    async function loadFile(targetPath) {
+      state.loading = true;
+      clearLogs();
+      render();
+
+      try {
+        if (targetPath) {
+          const res = await fetch(`/api/file?path=${encodeURIComponent(targetPath)}`);
+          if (res.ok) {
+            const content = await res.text();
+            state.fileContent = content.split('\n');
+            state.selectedLine = 0;
+            state.error = null;
+            state.currentFile = targetPath;
+            addLog(`Loaded file: ${targetPath}`, 'success');
+          } else {
+            state.error = `Cannot load file: ${targetPath}`;
+            addLog(`Error loading file: ${targetPath}`, 'error');
+          }
+
+          const loadRes = await fetch(`${API_BASE}/load`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: targetPath, dependencies: [] })
+          });
+          if (loadRes.ok) {
+            const data = await loadRes.json();
+            if (data.success) {
+              addLog('File loaded successfully', 'success');
+            } else {
+              addLog(`Warning: ${data.error || 'File may have errors'}`, 'error');
+            }
+          }
+        } else {
+          state.fileContent = [
+            '-- Select a .cic file from the dropdown above',
+            '',
+            'Available commands:',
+            '  j/k or Arrow Up/Down: Move cursor',
+            '  Click on a line: Select line',
+            '',
+            'The Goals panel will show type information',
+            'for the selected line.'
+          ];
+          state.error = null;
+          state.currentFile = null;
+        }
+
+        const envRes = await fetch(`${API_BASE}/env`);
+        if (envRes.ok) {
+          const data = await envRes.json();
+          state.declarations = data.declarations || [];
+          addLog(`Loaded ${state.declarations.length} declarations`, 'info');
+        }
+
+        await fetchLineInfo(state.selectedLine);
+      } catch (e) {
+        state.error = e.message;
+        addLog(`Error: ${e.message}`, 'error');
+      }
+
+      state.loading = false;
+      render();
+      scrollToSelected();
+    }
+
+    async function fetchLineInfo(lineNum) {
+      try {
+        let url = `${API_BASE}/line-info?line=${lineNum}`;
+        if (state.currentFile) {
+          url += `&file=${encodeURIComponent(state.currentFile)}`;
+        }
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          state.goals = data.goals || [];
+          state.penroseAvailable = data.penrose_available || false;
+          state.infoLines = data.info || [];
+          if (state.goals.length === 0 && state.infoLines.length === 0) {
+            state.goals = [{
+              hypotheses: [`Line ${lineNum + 1} selected`],
+              goal: `Type information for line ${lineNum + 1}`
+            }];
+          }
+        } else {
+          state.goals = [];
+          state.penroseAvailable = false;
+          state.infoLines = [];
+        }
+      } catch (e) {
+        state.goals = [];
+        state.penroseAvailable = false;
+        state.infoLines = [];
+      }
+    }
+
+    async function runTypeCheck() {
+      const target = fileSelector.value;
+      if (!target) {
+        addLog('Please select a file first', 'error');
+        return;
+      }
+
+      clearLogs();
+      addLog(`Running type check on: ${target}`, 'info');
+
+      try {
+        const res = await fetch(`${API_BASE}/load`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target, dependencies: [] })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            addLog('Type check passed!', 'success');
+            addLog('All declarations are valid', 'success');
+          } else {
+            addLog(`Type check failed: ${data.error || 'Unknown error'}`, 'error');
+          }
+        } else {
+          addLog('Failed to run type check', 'error');
+        }
+      } catch (e) {
+        addLog(`Type check error: ${e.message}`, 'error');
+      }
+    }
+
+    function scrollToSelected() {
+      const el = codeContent.querySelector('.selected');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function initResizer() {
+      let isResizing = false;
+      
+      resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+      
+      document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        const containerRect = document.querySelector('.main-content').getBoundingClientRect();
+        const newWidth = e.clientX - containerRect.left;
+        const minWidth = 300;
+        const maxWidth = containerRect.width - 300;
+        
+        if (newWidth > minWidth && newWidth < maxWidth) {
+          codePanel.style.width = newWidth + 'px';
+          codePanel.style.flex = '0 0 auto';
+        }
+      });
+      
+      document.addEventListener('mouseup', () => {
+        if (isResizing) {
+          isResizing = false;
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        }
+      });
+    }
+
+    fileSelector.addEventListener('change', (e) => {
+      const file = e.target.value;
+      if (file) {
+        const url = new URL(window.location);
+        url.searchParams.set('target', file);
+        window.history.pushState({}, '', url);
+        loadFile(file);
+      }
+    });
+
+    codeContent.addEventListener('click', async (e) => {
+      const line = e.target.closest('.code-line');
+      if (line) {
+        state.selectedLine = parseInt(line.dataset.line);
+        await fetchLineInfo(state.selectedLine);
+        render();
+        scrollToSelected();
+      }
+    });
+
+    document.addEventListener('keydown', async (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'k') {
+        if (state.selectedLine > 0) {
+          state.selectedLine--;
+          await fetchLineInfo(state.selectedLine);
+          render();
+          scrollToSelected();
+        }
+      } else if (e.key === 'ArrowDown' || e.key === 'j') {
+        if (state.selectedLine < state.fileContent.length - 1) {
+          state.selectedLine++;
+          await fetchLineInfo(state.selectedLine);
+          render();
+          scrollToSelected();
+        }
+      }
+    });
+
+    document.getElementById('btn-reload').addEventListener('click', () => {
+      const params = new URLSearchParams(window.location.search);
+      const target = params.get('target');
+      if (target) loadFile(target);
+    });
+
+    document.getElementById('btn-typecheck').addEventListener('click', runTypeCheck);
+
+    loadAvailableFiles().then(() => {
+      const params = new URLSearchParams(window.location.search);
+      let target = params.get('target');
+      
+      if (!target) {
+        const geometryFile = state.availableFiles.find(f => f.toLowerCase().includes('geometry'));
+        if (geometryFile) {
+          target = geometryFile;
+          fileSelector.value = target;
+        }
+      } else {
+        fileSelector.value = target;
+      }
+      
+      loadFile(target);
+      initResizer();
+    });
+  </script>
+</body>
+</html>
