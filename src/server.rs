@@ -10,12 +10,14 @@ use std::path::PathBuf;
 #[cfg(feature = "server")]
 use axum::{
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    response::IntoResponse,
+    routing::{get, get_service, post},
     Json, Router,
 };
 #[cfg(feature = "server")]
 use tower_http::cors::{Any, CorsLayer};
+#[cfg(feature = "server")]
+use tower_http::services::ServeFile;
 
 #[cfg(feature = "server")]
 use crate::repl::Repl;
@@ -88,19 +90,18 @@ pub struct NotationsResponse {
 
 #[cfg(feature = "server")]
 pub async fn start_server(port: u16, static_path: PathBuf) {
+    use tower_http::services::ServeFile;
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
     let api_static_path = static_path.clone();
-    let tui_static_path = static_path.join("tui");
-    let gallery_static_path = static_path.join("gallery");
+    let index_path = static_path.join("tui").join("index.html");
 
     let app = Router::new()
-        .route("/", get(|| async { Html(tmpl_index()) }))
-        .route("/tui", get(|| async { Html(tmpl_tui_index()) }))
-        .route("/tui/", get(|| async { Html(tmpl_tui_index()) }))
+        .route("/", get_service(ServeFile::new(&index_path)).layer(cors.clone()))
         .route("/api/load", post(load_handler))
         .route("/api/line-info", get(line_info_handler))
         .route("/api/env", get(env_handler))
@@ -109,13 +110,11 @@ pub async fn start_server(port: u16, static_path: PathBuf) {
         .route("/api/file", get(move |axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>| async move {
             file_handler_impl(params, api_static_path.clone())
         }))
-        .nest_service("/tui/assets", tower_http::services::ServeDir::new(tui_static_path))
-        .nest_service("/gallery", tower_http::services::ServeDir::new(gallery_static_path))
         .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("Server running at http://localhost:{}", port);
-    println!("TUI at http://localhost:{}/tui/", port);
+    println!("Open http://localhost:{}?target=<file.cic> to view a file", port);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -195,7 +194,7 @@ async fn notations_handler() -> Json<NotationsResponse> {
 }
 
 #[cfg(feature = "server")]
-fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> Response {
+fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> axum::response::Response {
     if let Some(path) = params.get("path") {
         let full_path = static_path.join(path);
         if full_path.exists() && full_path.is_file() {
@@ -212,27 +211,9 @@ fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> R
     (StatusCode::NOT_FOUND, "File not found").into_response()
 }
 
-fn tmpl_index() -> String {
-    r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TinyCIC</title>
-</head>
-<body>
-  <h1>TinyCIC Server</h1>
-  <ul>
-    <li><a href="/tui/">Interactive Goal Viewer (TUI)</a></li>
-    <li><a href="/gallery/index.html">Geometry Gallery</a></li>
-  </ul>
-</body>
-</html>"#.to_string()
-}
-
 fn tmpl_tui_index() -> String {
-    let css_path = "/tui/assets/styles.css";
-    let js_path = "/tui/assets/app.js";
+    let css_path = "/assets/styles.css";
+    let js_path = "/assets/app.js";
 
     format!(r#"<!DOCTYPE html>
 <html lang="en">
