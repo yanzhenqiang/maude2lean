@@ -54,12 +54,28 @@
     .line-num { color: #6c7086; width: 35px; text-align: right; margin-right: 10px; user-select: none; }
     .line-marker { color: #89b4fa; width: 15px; user-select: none; }
     .line-content { color: #cdd6f4; white-space: pre; }
-    .info-content { flex: 1; overflow-y: auto; padding: 10px 15px; }
+    .info-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .sub-panel { flex: 1; display: flex; flex-direction: column; border-bottom: 1px solid #313244; }
+    .sub-panel:last-child { border-bottom: none; }
+    .sub-panel-header {
+      padding: 6px 12px;
+      background-color: #1e1e2e;
+      color: #6c7086;
+      font-size: 11px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #313244;
+    }
+    .sub-panel-content { flex: 1; overflow-y: auto; padding: 10px; }
     .info-empty { color: #6c7086; font-style: italic; }
     .info-line { margin-bottom: 3px; word-wrap: break-word; }
     .goals-section { margin-top: 15px; padding-top: 10px; border-top: 1px solid #313244; }
     .hypothesis { color: #f9e2af; margin-bottom: 2px; padding-left: 10px; }
     .goal { color: #a6e3a1; padding-left: 10px; }
+    .penrose-canvas { width: 100%; height: 100%; background-color: #181825; border-radius: 4px; }
+    .log-entry { font-size: 12px; margin-bottom: 2px; }
+    .log-info { color: #89b4fa; }
+    .log-error { color: #f38ba8; }
+    .log-success { color: #a6e3a1; }
     .status-bar {
       display: flex; gap: 15px; padding: 8px 15px;
       background-color: #181825; border-top: 1px solid #313244;
@@ -84,6 +100,7 @@
         <option value="">-- Select a file --</option>
       </select>
       <button id="btn-reload">Reload</button>
+      <button id="btn-typecheck">TypeCheck</button>
     </div>
   </div>
   <div class="main-content">
@@ -92,8 +109,21 @@
       <div class="code-content" id="code-content"></div>
     </div>
     <div class="info-panel">
-      <div class="panel-header">Goals / Types</div>
-      <div class="info-content" id="info-content"></div>
+      <div class="panel-header">Goal / Penrose / Log</div>
+      <div class="info-content" id="info-content">
+        <div class="sub-panel">
+          <div class="sub-panel-header">Goals</div>
+          <div class="sub-panel-content" id="goals-panel"></div>
+        </div>
+        <div class="sub-panel">
+          <div class="sub-panel-header">Penrose</div>
+          <div class="sub-panel-content" id="penrose-panel"></div>
+        </div>
+        <div class="sub-panel">
+          <div class="sub-panel-header">TypeCheck Log</div>
+          <div class="sub-panel-content" id="log-panel"></div>
+        </div>
+      </div>
     </div>
   </div>
   <div class="status-bar" id="status-bar"></div>
@@ -106,11 +136,15 @@
       declarations: [],
       availableFiles: [],
       loading: false,
-      error: null
+      error: null,
+      goals: [],
+      logs: []
     };
 
     const codeContent = document.getElementById('code-content');
-    const infoContent = document.getElementById('info-content');
+    const goalsPanel = document.getElementById('goals-panel');
+    const penrosePanel = document.getElementById('penrose-panel');
+    const logPanel = document.getElementById('log-panel');
     const statusBar = document.getElementById('status-bar');
     const fileSelector = document.getElementById('file-selector');
 
@@ -123,12 +157,16 @@
     function render() {
       if (state.loading) {
         codeContent.innerHTML = '<div class="loading">Loading...</div>';
-        infoContent.innerHTML = '';
+        goalsPanel.innerHTML = '<div class="loading">Loading...</div>';
+        penrosePanel.innerHTML = '';
+        logPanel.innerHTML = '';
         return;
       }
       if (state.error) {
         codeContent.innerHTML = `<div class="error">${escapeHtml(state.error)}</div>`;
-        infoContent.innerHTML = '';
+        goalsPanel.innerHTML = `<div class="error">${escapeHtml(state.error)}</div>`;
+        penrosePanel.innerHTML = '';
+        logPanel.innerHTML = '';
         return;
       }
 
@@ -146,15 +184,91 @@
       }
       codeContent.innerHTML = codeHtml;
 
-      infoContent.innerHTML = state.declarations.length > 0
-        ? `<div class="info-line">${state.declarations.length} declarations</div>`
-        : '<div class="info-empty">No declarations</div>';
+      renderGoals();
+      renderPenrose();
+      renderLogs();
 
       statusBar.innerHTML = `
         <span>Line ${state.selectedLine + 1}/${state.fileContent.length}</span>
         <span>|</span>
         <span>${state.declarations.length} declarations</span>
+        <span>|</span>
+        <span>${state.goals.length} goals</span>
       `;
+    }
+
+    function renderGoals() {
+      if (state.goals.length === 0) {
+        goalsPanel.innerHTML = '<div class="info-empty">Select a line to see goals</div>';
+        return;
+      }
+
+      let html = '';
+      for (let i = 0; i < state.goals.length; i++) {
+        const goal = state.goals[i];
+        html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #313244;">`;
+        html += `<div style="color: #fab387; font-weight: bold; margin-bottom: 5px;">Goal ${i + 1}</div>`;
+        if (goal.hypotheses && goal.hypotheses.length > 0) {
+          html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px;">Hypotheses:</div>`;
+          for (const hyp of goal.hypotheses) {
+            html += `<div class="hypothesis">${escapeHtml(hyp)}</div>`;
+          }
+        }
+        html += `<div style="color: #6c7086; font-size: 11px; margin-bottom: 3px; margin-top: 5px;">Goal:</div>`;
+        html += `<div class="goal">${escapeHtml(goal.goal || '')}</div>`;
+        html += `</div>`;
+      }
+      goalsPanel.innerHTML = html;
+    }
+
+    function renderPenrose() {
+      const isGeometry = state.availableFiles.find(f => f.toLowerCase().includes('geometry')) && 
+                         fileSelector.value.toLowerCase().includes('geometry');
+      
+      if (!isGeometry) {
+        penrosePanel.innerHTML = '<div class="info-empty">Penrose visualization available for geometry files</div>';
+        return;
+      }
+
+      penrosePanel.innerHTML = `
+        <svg class="penrose-canvas" viewBox="0 0 400 300">
+          <circle cx="200" cy="150" r="80" fill="none" stroke="#89b4fa" stroke-width="2"/>
+          <line x1="200" y1="70" x2="200" y2="230" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>
+          <line x1="120" y1="150" x2="280" y2="150" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>
+          <circle cx="200" cy="150" r="5" fill="#f38ba8"/>
+          <text x="200" y="20" text-anchor="middle" fill="#6c7086" font-size="12">Circle</text>
+          <circle cx="100" cy="80" r="25" fill="none" stroke="#a6e3a1" stroke-width="2"/>
+          <circle cx="300" cy="200" r="35" fill="none" stroke="#fab387" stroke-width="2"/>
+          <line x1="100" y1="80" x2="300" y2="200" stroke="#f9e2af" stroke-width="1" stroke-dasharray="4"/>
+          <text x="100" y="130" text-anchor="middle" fill="#6c7086" font-size="10">A</text>
+          <text x="300" y="250" text-anchor="middle" fill="#6c7086" font-size="10">B</text>
+        </svg>
+      `;
+    }
+
+    function renderLogs() {
+      if (state.logs.length === 0) {
+        logPanel.innerHTML = '<div class="info-empty">Click TypeCheck to run type checking</div>';
+        return;
+      }
+
+      let html = '';
+      for (const log of state.logs) {
+        const cls = log.type === 'error' ? 'log-error' : log.type === 'success' ? 'log-success' : 'log-info';
+        html += `<div class="log-entry ${cls}">${escapeHtml(log.message)}</div>`;
+      }
+      logPanel.innerHTML = html;
+    }
+
+    function addLog(message, type = 'info') {
+      state.logs.push({ message, type });
+      if (state.logs.length > 100) state.logs.shift();
+      renderLogs();
+    }
+
+    function clearLogs() {
+      state.logs = [];
+      renderLogs();
     }
 
     async function loadAvailableFiles() {
@@ -179,6 +293,7 @@
 
     async function loadFile(targetPath) {
       state.loading = true;
+      clearLogs();
       render();
 
       try {
@@ -189,8 +304,10 @@
             state.fileContent = content.split('\n');
             state.selectedLine = 0;
             state.error = null;
+            addLog(`Loaded file: ${targetPath}`, 'success');
           } else {
             state.error = `Cannot load file: ${targetPath}`;
+            addLog(`Error loading file: ${targetPath}`, 'error');
           }
         } else {
           state.fileContent = [
@@ -200,7 +317,7 @@
             '  j/k or Arrow Up/Down: Move cursor',
             '  Click on a line: Select line',
             '',
-            'The Goals/Types panel will show type information',
+            'The Goals panel will show type information',
             'for the selected line.'
           ];
           state.error = null;
@@ -210,14 +327,71 @@
         if (envRes.ok) {
           const data = await envRes.json();
           state.declarations = data.declarations || [];
+          addLog(`Loaded ${state.declarations.length} declarations`, 'info');
         }
+
+        await fetchLineInfo(state.selectedLine);
       } catch (e) {
         state.error = e.message;
+        addLog(`Error: ${e.message}`, 'error');
       }
 
       state.loading = false;
       render();
       scrollToSelected();
+    }
+
+    async function fetchLineInfo(lineNum) {
+      try {
+        const res = await fetch(`${API_BASE}/line-info?line=${lineNum}`);
+        if (res.ok) {
+          const data = await res.json();
+          state.goals = data.goals || [];
+          if (state.goals.length === 0) {
+            state.goals = [{
+              hypotheses: [`Line ${lineNum + 1} selected`],
+              goal: `Type information for line ${lineNum + 1}`
+            }];
+          }
+        } else {
+          state.goals = [];
+        }
+      } catch (e) {
+        state.goals = [];
+      }
+    }
+
+    async function runTypeCheck() {
+      const target = fileSelector.value;
+      if (!target) {
+        addLog('Please select a file first', 'error');
+        return;
+      }
+
+      clearLogs();
+      addLog(`Running type check on: ${target}`, 'info');
+
+      try {
+        const res = await fetch(`${API_BASE}/load`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target, dependencies: [] })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            addLog('Type check passed!', 'success');
+            addLog('All declarations are valid', 'success');
+          } else {
+            addLog(`Type check failed: ${data.error || 'Unknown error'}`, 'error');
+          }
+        } else {
+          addLog('Failed to run type check', 'error');
+        }
+      } catch (e) {
+        addLog(`Type check error: ${e.message}`, 'error');
+      }
     }
 
     function scrollToSelected() {
@@ -235,25 +409,28 @@
       }
     });
 
-    codeContent.addEventListener('click', (e) => {
+    codeContent.addEventListener('click', async (e) => {
       const line = e.target.closest('.code-line');
       if (line) {
         state.selectedLine = parseInt(line.dataset.line);
+        await fetchLineInfo(state.selectedLine);
         render();
         scrollToSelected();
       }
     });
 
-    document.addEventListener('keydown', (e) => {
+    document.addEventListener('keydown', async (e) => {
       if (e.key === 'ArrowUp' || e.key === 'k') {
         if (state.selectedLine > 0) {
           state.selectedLine--;
+          await fetchLineInfo(state.selectedLine);
           render();
           scrollToSelected();
         }
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
         if (state.selectedLine < state.fileContent.length - 1) {
           state.selectedLine++;
+          await fetchLineInfo(state.selectedLine);
           render();
           scrollToSelected();
         }
@@ -266,16 +443,23 @@
       if (target) loadFile(target);
     });
 
-    // Initialize
+    document.getElementById('btn-typecheck').addEventListener('click', runTypeCheck);
+
     loadAvailableFiles().then(() => {
       const params = new URLSearchParams(window.location.search);
-      const target = params.get('target');
-      if (target) {
-        fileSelector.value = target;
-        loadFile(target);
+      let target = params.get('target');
+      
+      if (!target) {
+        const geometryFile = state.availableFiles.find(f => f.toLowerCase().includes('geometry'));
+        if (geometryFile) {
+          target = geometryFile;
+          fileSelector.value = target;
+        }
       } else {
-        loadFile(null);
+        fileSelector.value = target;
       }
+      
+      loadFile(target);
     });
   </script>
 </body>
