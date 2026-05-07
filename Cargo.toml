@@ -3,6 +3,31 @@ name = "tinycic"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+server = ["axum", "tokio", "tower-http", "parking_lot"]
+
 [dependencies]
 crossterm = "0.29.0"
 indexmap = "2.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dependencies.axum]
+version = "0.7"
+optional = true
+features = ["json"]
+
+[dependencies.tokio]
+version = "1"
+optional = true
+features = ["full"]
+
+[dependencies.tower-http]
+version = "0.5"
+optional = true
+features = ["fs", "cors"]
+
+[dependencies.parking_lot]
+version = "0.12"
+optional = true

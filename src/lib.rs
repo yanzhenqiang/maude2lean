@@ -7,5 +7,13 @@ pub mod repl;
 pub mod repl_parser;
 pub mod tactic;
 pub mod test_auto_rec;
-pub mod tui;
 pub mod type_checker;
+
+#[cfg(feature = "server")]
+pub mod server;
+
+#[cfg(not(feature = "server"))]
+pub mod tui;
+
+#[cfg(feature = "server")]
+pub use server::*;
