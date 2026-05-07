@@ -230,6 +230,7 @@ fn run_check_files(files: &[String]) {
     }
 }
 
+#[cfg(not(feature = "server"))]
 fn run_tui(args: &[String]) {
     use std::fs;
 
@@ -275,16 +276,22 @@ fn run_tui(args: &[String]) {
 }
 
 #[cfg(feature = "server")]
+fn run_tui(_args: &[String]) {
+    eprintln!("TUI is not available with server feature. Use 'serve' command instead.");
+    std::process::exit(1);
+}
+
+#[cfg(feature = "server")]
 fn run_server() {
     use tinycic::server::start_server;
-    use std::path::Path;
+    use std::path::PathBuf;
 
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
 
-    let static_path = Path::new("web");
+    let static_path = PathBuf::from("web");
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     rt.block_on(start_server(port, static_path));
 }

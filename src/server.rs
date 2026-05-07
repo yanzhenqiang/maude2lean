@@ -1,21 +1,31 @@
+#[cfg(feature = "server")]
 use std::collections::HashMap;
+#[cfg(feature = "server")]
 use std::fs;
+#[cfg(feature = "server")]
 use std::net::SocketAddr;
+#[cfg(feature = "server")]
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[cfg(feature = "server")]
-use parking_lot::Mutex;
+use axum::{
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+#[cfg(feature = "server")]
+use tower_http::cors::{Any, CorsLayer};
 
 #[cfg(feature = "server")]
 use crate::repl::Repl;
 
 #[cfg(feature = "server")]
 pub struct ServerState {
-    pub loaded_files: Vec<String>,
-    pub infix_ops: HashMap<String, String>,
-    pub notations: HashMap<String, String>,
-    pub declarations: Vec<String>,
+    loaded_files: Vec<String>,
+    infix_ops: HashMap<String, String>,
+    notations: HashMap<String, String>,
+    declarations: Vec<String>,
 }
 
 #[cfg(feature = "server")]
@@ -29,9 +39,6 @@ impl Default for ServerState {
         }
     }
 }
-
-#[cfg(feature = "server")]
-pub type SharedState = Arc<Mutex<ServerState>>;
 
 #[derive(serde::Deserialize)]
 pub struct LoadRequest {
@@ -81,35 +88,29 @@ pub struct NotationsResponse {
 
 #[cfg(feature = "server")]
 pub async fn start_server(port: u16, static_path: PathBuf) {
-    use axum::{
-        extract::State,
-        http::StatusCode,
-        response::{Html, IntoResponse, Response},
-        routing::{get, post},
-        Json, Router,
-    };
-    use tower_http::cors::{Any, CorsLayer};
-
-    let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
-    let static_path_clone = static_path.clone();
-
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let api_static_path = static_path.clone();
+    let tui_static_path = static_path.join("tui");
+    let gallery_static_path = static_path.join("gallery");
+
     let app = Router::new()
-        .route("/", get(move || async move { Html(tmpl_index()) }))
-        .route("/tui/", get(move || async move { Html(tmpl_tui_index()) }))
+        .route("/", get(|| async { Html(tmpl_index()) }))
+        .route("/tui", get(|| async { Html(tmpl_tui_index()) }))
+        .route("/tui/", get(|| async { Html(tmpl_tui_index()) }))
         .route("/api/load", post(load_handler))
         .route("/api/line-info", get(line_info_handler))
         .route("/api/env", get(env_handler))
         .route("/api/infix-ops", get(infix_ops_handler))
         .route("/api/notations", get(notations_handler))
         .route("/api/file", get(move |axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>| async move {
-            file_handler_impl(params, static_path_clone.clone())
+            file_handler_impl(params, api_static_path.clone())
         }))
-        .with_state(state)
+        .nest_service("/tui/assets", tower_http::services::ServeDir::new(tui_static_path))
+        .nest_service("/gallery", tower_http::services::ServeDir::new(gallery_static_path))
         .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -121,10 +122,7 @@ pub async fn start_server(port: u16, static_path: PathBuf) {
 }
 
 #[cfg(feature = "server")]
-async fn load_handler(
-    State(state): State<SharedState>,
-    Json(req): Json<LoadRequest>,
-) -> Json<LoadResponse> {
+async fn load_handler(Json(req): Json<LoadRequest>) -> Json<LoadResponse> {
     let mut repl = Repl::new();
     repl.set_quiet(true);
 
@@ -133,10 +131,6 @@ async fn load_handler(
 
     match repl.check_files(&all_files) {
         Ok(_) => {
-            let names: Vec<String> = repl.env().iter_names().map(|n| n.to_string()).collect();
-            let mut state = state.lock();
-            state.loaded_files.push(req.target.clone());
-            state.declarations = names;
             Json(LoadResponse { success: true, error: None })
         }
         Err(e) => Json(LoadResponse {
@@ -147,59 +141,61 @@ async fn load_handler(
 }
 
 #[cfg(feature = "server")]
-async fn line_info_handler(
-    State(state): State<SharedState>,
-    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
-) -> Json<LineInfoResponse> {
+async fn line_info_handler(axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>) -> Json<LineInfoResponse> {
     let line = params
         .get("line")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let state = state.lock();
-    let info = vec![format!("Environment: {} declarations", state.declarations.len())];
-
     Json(LineInfoResponse {
         success: true,
         line,
-        info,
+        info: vec![format!("Line: {}", line + 1)],
         goals: None,
         error: None,
     })
 }
 
 #[cfg(feature = "server")]
-async fn env_handler(State(state): State<SharedState>) -> Json<EnvResponse> {
-    let state = state.lock();
-    Json(EnvResponse {
-        success: true,
-        declarations: state.declarations.clone(),
-        error: None,
-    })
+async fn env_handler() -> Json<EnvResponse> {
+    let mut repl = Repl::new();
+    repl.set_quiet(true);
+    
+    match repl.check_files(&["lib/Nat.cic"]) {
+        Ok(_) => {
+            let names: Vec<String> = repl.env().iter_names().map(|n| n.to_string()).collect();
+            Json(EnvResponse {
+                success: true,
+                declarations: names,
+                error: None,
+            })
+        }
+        Err(e) => Json(EnvResponse {
+            success: false,
+            declarations: Vec::new(),
+            error: Some(e),
+        }),
+    }
 }
 
 #[cfg(feature = "server")]
-async fn infix_ops_handler(State(state): State<SharedState>) -> Json<InfixOpsResponse> {
-    let state = state.lock();
+async fn infix_ops_handler() -> Json<InfixOpsResponse> {
     Json(InfixOpsResponse {
         success: true,
-        ops: state.infix_ops.clone(),
+        ops: HashMap::new(),
     })
 }
 
 #[cfg(feature = "server")]
-async fn notations_handler(State(state): State<SharedState>) -> Json<NotationsResponse> {
-    let state = state.lock();
+async fn notations_handler() -> Json<NotationsResponse> {
     Json(NotationsResponse {
         success: true,
-        notations: state.notations.clone(),
+        notations: HashMap::new(),
     })
 }
 
 #[cfg(feature = "server")]
 fn file_handler_impl(params: HashMap<String, String>, static_path: PathBuf) -> Response {
-    use axum::http::StatusCode;
-
     if let Some(path) = params.get("path") {
         let full_path = static_path.join(path);
         if full_path.exists() && full_path.is_file() {
@@ -235,9 +231,8 @@ fn tmpl_index() -> String {
 }
 
 fn tmpl_tui_index() -> String {
-    let base_path = std::env::var("TUI_BASE_PATH").unwrap_or_else(|_| "/tui".to_string());
-    let css_path = format!("{}/styles.css", base_path);
-    let js_path = format!("{}/app.js", base_path);
+    let css_path = "/tui/assets/styles.css";
+    let js_path = "/tui/assets/app.js";
 
     format!(r#"<!DOCTYPE html>
 <html lang="en">

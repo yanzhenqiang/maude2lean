@@ -661,7 +661,6 @@ dependencies = [
  "axum",
  "crossterm",
  "indexmap",
- "parking_lot",
  "serde",
  "serde_json",
  "tokio",

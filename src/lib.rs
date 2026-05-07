@@ -14,6 +14,3 @@ pub mod server;
 
 #[cfg(not(feature = "server"))]
 pub mod tui;
-
-#[cfg(feature = "server")]
-pub use server::*;

@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-server = ["axum", "tokio", "tower-http", "parking_lot"]
+server = ["axum", "tokio", "tower-http"]
 
 [dependencies]
 crossterm = "0.29.0"
@@ -27,7 +27,3 @@ features = ["full"]
 version = "0.5"
 optional = true
 features = ["fs", "cors"]
-
-[dependencies.parking_lot]
-version = "0.12"
-optional = true
