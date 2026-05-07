@@ -23,8 +23,8 @@
       border-bottom: 1px solid #313244;
     }
     .header h1 { font-size: 18px; color: #89b4fa; }
-    .controls { display: flex; gap: 10px; }
-    .controls button {
+    .controls { display: flex; gap: 10px; align-items: center; }
+    .controls select, .controls button {
       padding: 6px 12px;
       background-color: #313244;
       color: #cdd6f4;
@@ -32,8 +32,10 @@
       border-radius: 4px;
       cursor: pointer;
       font-family: inherit;
+      font-size: 13px;
     }
-    .controls button:hover { background-color: #45475a; }
+    .controls select:hover, .controls button:hover { background-color: #45475a; }
+    .controls select { min-width: 200px; }
     .main-content { display: flex; height: calc(100vh - 50px); }
     .code-panel { flex: 0 0 55%; border-right: 1px solid #313244; display: flex; flex-direction: column; }
     .info-panel { flex: 1; display: flex; flex-direction: column; }
@@ -78,6 +80,9 @@
   <div class="header">
     <h1>TinyCIC Goal Viewer</h1>
     <div class="controls">
+      <select id="file-selector">
+        <option value="">-- Select a file --</option>
+      </select>
       <button id="btn-reload">Reload</button>
     </div>
   </div>
@@ -99,6 +104,7 @@
       fileContent: [],
       selectedLine: 0,
       declarations: [],
+      availableFiles: [],
       loading: false,
       error: null
     };
@@ -106,6 +112,7 @@
     const codeContent = document.getElementById('code-content');
     const infoContent = document.getElementById('info-content');
     const statusBar = document.getElementById('status-bar');
+    const fileSelector = document.getElementById('file-selector');
 
     function escapeHtml(text) {
       const div = document.createElement('div');
@@ -150,35 +157,53 @@
       `;
     }
 
-    async function loadFile() {
+    async function loadAvailableFiles() {
+      try {
+        const res = await fetch(`${API_BASE}/list-files`);
+        if (res.ok) {
+          const data = await res.json();
+          state.availableFiles = data.files || [];
+          
+          fileSelector.innerHTML = '<option value="">-- Select a file --</option>';
+          for (const file of state.availableFiles) {
+            const opt = document.createElement('option');
+            opt.value = file;
+            opt.textContent = file;
+            fileSelector.appendChild(opt);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load file list:', e);
+      }
+    }
+
+    async function loadFile(targetPath) {
       state.loading = true;
       render();
 
       try {
-        const params = new URLSearchParams(window.location.search);
-        const target = params.get('target');
-
-        if (target) {
-          const res = await fetch(`/api/file?path=${encodeURIComponent(target)}`);
+        if (targetPath) {
+          const res = await fetch(`/api/file?path=${encodeURIComponent(targetPath)}`);
           if (res.ok) {
             const content = await res.text();
             state.fileContent = content.split('\n');
             state.selectedLine = 0;
+            state.error = null;
           } else {
-            state.error = `Cannot load file: ${target}`;
+            state.error = `Cannot load file: ${targetPath}`;
           }
         } else {
           state.fileContent = [
-            '-- Use ?target=<path> to load a file',
-            '-- Example: ?target=examples/demo.cic',
+            '-- Select a .cic file from the dropdown above',
             '',
-            'def add (n m : Nat) : Nat := by',
-            '  intro n m',
-            '  induction n',
-            '  exact m',
-            '  intro k ih',
-            '  exact succ ih'
+            'Available commands:',
+            '  j/k or Arrow Up/Down: Move cursor',
+            '  Click on a line: Select line',
+            '',
+            'The Goals/Types panel will show type information',
+            'for the selected line.'
           ];
+          state.error = null;
         }
 
         const envRes = await fetch(`${API_BASE}/env`);
@@ -199,6 +224,16 @@
       const el = codeContent.querySelector('.selected');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
+
+    fileSelector.addEventListener('change', (e) => {
+      const file = e.target.value;
+      if (file) {
+        const url = new URL(window.location);
+        url.searchParams.set('target', file);
+        window.history.pushState({}, '', url);
+        loadFile(file);
+      }
+    });
 
     codeContent.addEventListener('click', (e) => {
       const line = e.target.closest('.code-line');
@@ -225,9 +260,23 @@
       }
     });
 
-    document.getElementById('btn-reload').addEventListener('click', loadFile);
+    document.getElementById('btn-reload').addEventListener('click', () => {
+      const params = new URLSearchParams(window.location.search);
+      const target = params.get('target');
+      if (target) loadFile(target);
+    });
 
-    loadFile();
+    // Initialize
+    loadAvailableFiles().then(() => {
+      const params = new URLSearchParams(window.location.search);
+      const target = params.get('target');
+      if (target) {
+        fileSelector.value = target;
+        loadFile(target);
+      } else {
+        loadFile(null);
+      }
+    });
   </script>
 </body>
 </html>
