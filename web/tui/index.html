@@ -254,6 +254,269 @@
       }
     }
 
+    // Parse geometry info from theorem line and nearby lines
+    function parseGeometryInfo() {
+      const lines = state.fileContent;
+      const currentLine = state.selectedLine;
+      
+      // Find the theorem declaration
+      let theoremLine = -1;
+      for (let i = currentLine; i >= 0; i--) {
+        const trimmed = lines[i].trim();
+        if (trimmed.startsWith('theorem ') || trimmed.startsWith('def ') || trimmed.startsWith('axiom ')) {
+          theoremLine = i;
+          break;
+        }
+      }
+      
+      if (theoremLine === -1) return null;
+      
+      const declLine = lines[theoremLine].trim();
+      
+      // Extract theorem name and parameters
+      const nameMatch = declLine.match(/(?:theorem|def|axiom)\s+(\w+)/);
+      const name = nameMatch ? nameMatch[1] : '';
+      
+      // Extract point parameters (e.g., forall (A : Point), forall (B : Point))
+      const points = [];
+      const pointRegex = /\(\s*(\w+)\s*:\s*Point\s*\)/g;
+      let match;
+      while ((match = pointRegex.exec(declLine)) !== null) {
+        points.push(match[1]);
+      }
+      
+      // Extract line parameters
+      const lineParams = [];
+      const lineRegex = /\(\s*(\w+)\s*:\s*Line\s*\)/g;
+      while ((match = lineRegex.exec(declLine)) !== null) {
+        lineParams.push(match[1]);
+      }
+      
+      // Determine geometry type from name and content
+      let geomType = 'generic';
+      const lowerName = name.toLowerCase();
+      const lowerDecl = declLine.toLowerCase();
+      
+      if (lowerName.includes('triangle') || lowerDecl.includes('triangle')) geomType = 'triangle';
+      else if (lowerName.includes('circle') || lowerDecl.includes('circle')) geomType = 'circle';
+      else if (lowerName.includes('parallel') || lowerDecl.includes('parallel')) geomType = 'parallel';
+      else if (lowerName.includes('perpendicular') || lowerDecl.includes('perpendicular')) geomType = 'perpendicular';
+      else if (lowerName.includes('midpoint') || lowerDecl.includes('midpoint')) geomType = 'midpoint';
+      else if (lowerName.includes('between') || lowerDecl.includes('between')) geomType = 'segment';
+      else if (lowerName.includes('collinear') || lowerDecl.includes('collinear')) geomType = 'collinear';
+      else if (lowerName.includes('rectangle') || lowerDecl.includes('rectangle')) geomType = 'rectangle';
+      else if (lowerName.includes('isosceles') || lowerDecl.includes('isosceles')) geomType = 'isosceles';
+      else if (lowerName.includes('equilateral') || lowerDecl.includes('equilateral')) geomType = 'equilateral';
+      else if (lowerName.includes('angle') || lowerDecl.includes('angle')) geomType = 'angle';
+      else if (lowerName.includes('congruent') || lowerDecl.includes('congruent')) geomType = 'congruent';
+      else if (lowerName.includes('butterfly') || lowerDecl.includes('butterfly')) geomType = 'butterfly';
+      else if (points.length >= 3) geomType = 'triangle';
+      else if (points.length === 2) geomType = 'segment';
+      
+      return { name, points, lineParams, geomType, declLine };
+    }
+
+    function generatePenroseSVG(geomInfo) {
+      if (!geomInfo) return '';
+      
+      const { name, points, lineParams, geomType } = geomInfo;
+      const W = 400, H = 300;
+      const margin = 40;
+      
+      // Helper to create point positions
+      function getPointPositions(count) {
+        const positions = [];
+        if (count === 1) {
+          positions.push({ x: W/2, y: H/2 });
+        } else if (count === 2) {
+          positions.push({ x: W/3, y: H/2 });
+          positions.push({ x: 2*W/3, y: H/2 });
+        } else if (count === 3) {
+          // Triangle layout
+          positions.push({ x: W/2, y: margin + 20 });
+          positions.push({ x: margin + 30, y: H - margin - 20 });
+          positions.push({ x: W - margin - 30, y: H - margin - 20 });
+        } else if (count === 4) {
+          // Quadrilateral layout
+          positions.push({ x: margin + 40, y: margin + 30 });
+          positions.push({ x: W - margin - 40, y: margin + 30 });
+          positions.push({ x: W - margin - 40, y: H - margin - 30 });
+          positions.push({ x: margin + 40, y: H - margin - 30 });
+        } else if (count >= 5) {
+          // Circle layout for many points
+          const radius = Math.min(W, H) / 2 - margin;
+          for (let i = 0; i < count; i++) {
+            const angle = (2 * Math.PI * i) / count - Math.PI / 2;
+            positions.push({
+              x: W/2 + radius * Math.cos(angle),
+              y: H/2 + radius * Math.sin(angle)
+            });
+          }
+        }
+        return positions;
+      }
+      
+      let svg = `<svg class="penrose-canvas" viewBox="0 0 ${W} ${H}">`;
+      
+      // Background
+      svg += `<rect width="${W}" height="${H}" fill="#181825"/>`;
+      
+      // Title
+      svg += `<text x="${W/2}" y="20" text-anchor="middle" fill="#89b4fa" font-size="14" font-weight="bold">${escapeHtml(name)}</text>`;
+      
+      const pos = getPointPositions(points.length || 3);
+      
+      switch (geomType) {
+        case 'triangle': {
+          if (points.length >= 3) {
+            // Draw triangle
+            svg += `<polygon points="${pos[0].x},${pos[0].y} ${pos[1].x},${pos[1].y} ${pos[2].x},${pos[2].y}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+            // Draw points
+            for (let i = 0; i < Math.min(3, points.length); i++) {
+              svg += `<circle cx="${pos[i].x}" cy="${pos[i].y}" r="4" fill="#f38ba8"/>`;
+              svg += `<text x="${pos[i].x}" y="${pos[i].y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[i]}</text>`;
+            }
+            // If isosceles, mark equal sides
+            if (name.toLowerCase().includes('isosceles')) {
+              svg += `<text x="${W/2}" y="${H - 10}" text-anchor="middle" fill="#a6e3a1" font-size="10">AB ≅ AC</text>`;
+            }
+          }
+          break;
+        }
+        case 'circle': {
+          const cx = W/2, cy = H/2, r = 80;
+          svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="4" fill="#f38ba8"/>`;
+          svg += `<text x="${cx}" y="${cy - r - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">O</text>`;
+          if (points.length > 0) {
+            const angle = -Math.PI / 4;
+            const px = cx + r * Math.cos(angle);
+            const py = cy + r * Math.sin(angle);
+            svg += `<circle cx="${px}" cy="${py}" r="4" fill="#a6e3a1"/>`;
+            svg += `<text x="${px + 10}" y="${py}" fill="#cdd6f4" font-size="12">${points[0]}</text>`;
+          }
+          break;
+        }
+        case 'parallel': {
+          const y1 = H/3, y2 = 2*H/3;
+          svg += `<line x1="${margin}" y1="${y1}" x2="${W - margin}" y2="${y1}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${margin}" y1="${y2}" x2="${W - margin}" y2="${y2}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<text x="${margin}" y="${y1 - 5}" fill="#cdd6f4" font-size="10">l</text>`;
+          svg += `<text x="${margin}" y="${y2 - 5}" fill="#cdd6f4" font-size="10">m</text>`;
+          if (points.length >= 2) {
+            svg += `<text x="${W/2}" y="${H - 10}" text-anchor="middle" fill="#a6e3a1" font-size="10">l ∥ m</text>`;
+          }
+          break;
+        }
+        case 'perpendicular': {
+          const cx = W/2, cy = H/2;
+          svg += `<line x1="${cx}" y1="${margin + 20}" x2="${cx}" y2="${H - margin - 20}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${margin + 40}" y1="${cy}" x2="${W - margin - 40}" y2="${cy}" stroke="#89b4fa" stroke-width="2"/>`;
+          // Right angle marker
+          svg += `<rect x="${cx}" y="${cy}" width="15" height="15" fill="none" stroke="#f9e2af" stroke-width="1.5"/>`;
+          svg += `<text x="${W/2}" y="${H - 10}" text-anchor="middle" fill="#a6e3a1" font-size="10">l ⊥ m</text>`;
+          break;
+        }
+        case 'midpoint': {
+          if (points.length >= 3) {
+            const p1 = pos[0], p2 = pos[1], pm = pos[2];
+            svg += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="#89b4fa" stroke-width="2"/>`;
+            svg += `<circle cx="${p1.x}" cy="${p1.y}" r="4" fill="#f38ba8"/>`;
+            svg += `<circle cx="${p2.x}" cy="${p2.y}" r="4" fill="#f38ba8"/>`;
+            svg += `<circle cx="${pm.x}" cy="${pm.y}" r="4" fill="#a6e3a1"/>`;
+            svg += `<text x="${p1.x}" y="${p1.y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[0]}</text>`;
+            svg += `<text x="${p2.x}" y="${p2.y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[1]}</text>`;
+            svg += `<text x="${pm.x}" y="${pm.y + 20}" text-anchor="middle" fill="#a6e3a1" font-size="12">${points[2]} (midpoint)</text>`;
+          }
+          break;
+        }
+        case 'segment': {
+          if (points.length >= 2) {
+            svg += `<line x1="${pos[0].x}" y1="${pos[0].y}" x2="${pos[1].x}" y2="${pos[1].y}" stroke="#89b4fa" stroke-width="2"/>`;
+            svg += `<circle cx="${pos[0].x}" cy="${pos[0].y}" r="4" fill="#f38ba8"/>`;
+            svg += `<circle cx="${pos[1].x}" cy="${pos[1].y}" r="4" fill="#f38ba8"/>`;
+            svg += `<text x="${pos[0].x}" y="${pos[0].y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[0]}</text>`;
+            svg += `<text x="${pos[1].x}" y="${pos[1].y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[1]}</text>`;
+          }
+          break;
+        }
+        case 'collinear': {
+          const y = H/2;
+          svg += `<line x1="${margin + 20}" y1="${y}" x2="${W - margin - 20}" y2="${y}" stroke="#89b4fa" stroke-width="2"/>`;
+          for (let i = 0; i < Math.min(points.length, 4); i++) {
+            const x = margin + 40 + (i * (W - 2*margin - 80) / Math.min(points.length - 1, 3));
+            svg += `<circle cx="${x}" cy="${y}" r="4" fill="#f38ba8"/>`;
+            svg += `<text x="${x}" y="${y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[i]}</text>`;
+          }
+          svg += `<text x="${W/2}" y="${H - 10}" text-anchor="middle" fill="#a6e3a1" font-size="10">collinear points</text>`;
+          break;
+        }
+        case 'rectangle': {
+          if (points.length >= 4) {
+            svg += `<polygon points="${pos[0].x},${pos[0].y} ${pos[1].x},${pos[1].y} ${pos[2].x},${pos[2].y} ${pos[3].x},${pos[3].y}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+            for (let i = 0; i < 4; i++) {
+              svg += `<circle cx="${pos[i].x}" cy="${pos[i].y}" r="4" fill="#f38ba8"/>`;
+              svg += `<text x="${pos[i].x}" y="${pos[i].y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[i]}</text>`;
+            }
+            // Right angle markers
+            svg += `<rect x="${pos[0].x}" y="${pos[0].y}" width="12" height="12" fill="none" stroke="#f9e2af" stroke-width="1"/>`;
+          }
+          break;
+        }
+        case 'angle': {
+          const cx = W/2, cy = H/2 + 20;
+          svg += `<line x1="${cx}" y1="${cy}" x2="${margin + 30}" y2="${margin + 30}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<line x1="${cx}" y1="${cy}" x2="${W - margin - 30}" y2="${margin + 30}" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="4" fill="#f38ba8"/>`;
+          // Angle arc
+          svg += `<path d="M ${cx - 30} ${cy} A 30 30 0 0 1 ${cx + 30} ${cy}" fill="none" stroke="#f9e2af" stroke-width="1.5"/>`;
+          if (points.length >= 3) {
+            svg += `<text x="${cx}" y="${cy + 25}" text-anchor="middle" fill="#a6e3a1" font-size="10">∠${points[0]}${points[1]}${points[2]}</text>`;
+          }
+          break;
+        }
+        case 'butterfly': {
+          // Butterfly theorem diagram
+          const cx = W/2, cy = H/2, r = 70;
+          // Circle
+          svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#89b4fa" stroke-width="2"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="3" fill="#f38ba8"/>`;
+          svg += `<text x="${cx}" y="${cy - r - 8}" text-anchor="middle" fill="#cdd6f4" font-size="10">O</text>`;
+          // Chord PQ
+          const px = cx - 50, py = cy + 40;
+          const qx = cx + 50, qy = cy + 40;
+          svg += `<line x1="${px}" y1="${py}" x2="${qx}" y2="${qy}" stroke="#a6e3a1" stroke-width="1.5"/>`;
+          svg += `<circle cx="${px}" cy="${py}" r="3" fill="#a6e3a1"/>`;
+          svg += `<circle cx="${qx}" cy="${qy}" r="3" fill="#a6e3a1"/>`;
+          svg += `<text x="${px - 10}" y="${py + 5}" fill="#a6e3a1" font-size="10">P</text>`;
+          svg += `<text x="${qx + 5}" y="${qy + 5}" fill="#a6e3a1" font-size="10">Q</text>`;
+          // Midpoint M
+          const mx = (px + qx) / 2, my = (py + qy) / 2;
+          svg += `<circle cx="${mx}" cy="${my}" r="3" fill="#fab387"/>`;
+          svg += `<text x="${mx}" y="${my + 15}" text-anchor="middle" fill="#fab387" font-size="10">M</text>`;
+          // Chords AB and CD through M
+          const ax = cx - 40, ay = cy - 50;
+          const bx = cx + 40, by = cy + 50;
+          const dx = cx + 40, dy = cy - 50;
+          const cx2 = cx - 40, cy2 = cy + 50;
+          svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>`;
+          svg += `<line x1="${cx2}" y1="${cy2}" x2="${dx}" y2="${dy}" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>`;
+          break;
+        }
+        default: {
+          // Generic: show points
+          for (let i = 0; i < points.length; i++) {
+            const p = pos[i] || { x: W/2 + (i - points.length/2) * 60, y: H/2 };
+            svg += `<circle cx="${p.x}" cy="${p.y}" r="4" fill="#f38ba8"/>`;
+            svg += `<text x="${p.x}" y="${p.y - 10}" text-anchor="middle" fill="#cdd6f4" font-size="12">${points[i]}</text>`;
+          }
+        }
+      }
+      
+      svg += '</svg>';
+      return svg;
+    }
+
     function renderPenrose() {
       const isGeometryFile = (state.currentFile || '').toLowerCase().includes('geometry');
       
@@ -267,20 +530,14 @@
         return;
       }
 
-      penrosePanel.innerHTML = `
-        <svg class="penrose-canvas" viewBox="0 0 400 300">
-          <circle cx="200" cy="150" r="80" fill="none" stroke="#89b4fa" stroke-width="2"/>
-          <line x1="200" y1="70" x2="200" y2="230" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>
-          <line x1="120" y1="150" x2="280" y2="150" stroke="#6c7086" stroke-width="1" stroke-dasharray="4"/>
-          <circle cx="200" cy="150" r="5" fill="#f38ba8"/>
-          <text x="200" y="20" text-anchor="middle" fill="#6c7086" font-size="12">Circle</text>
-          <circle cx="100" cy="80" r="25" fill="none" stroke="#a6e3a1" stroke-width="2"/>
-          <circle cx="300" cy="200" r="35" fill="none" stroke="#fab387" stroke-width="2"/>
-          <line x1="100" y1="80" x2="300" y2="200" stroke="#f9e2af" stroke-width="1" stroke-dasharray="4"/>
-          <text x="100" y="130" text-anchor="middle" fill="#6c7086" font-size="10">A</text>
-          <text x="300" y="250" text-anchor="middle" fill="#6c7086" font-size="10">B</text>
-        </svg>
-      `;
+      const geomInfo = parseGeometryInfo();
+      const svg = generatePenroseSVG(geomInfo);
+      
+      if (svg) {
+        penrosePanel.innerHTML = svg;
+      } else {
+        penrosePanel.innerHTML = '<div class="info-empty">Could not parse geometry information</div>';
+      }
     }
 
     function renderLogs() {
